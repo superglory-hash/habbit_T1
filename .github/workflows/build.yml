@@ -19,7 +19,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Generate Android Project & 60-Day Widget + Multi-App Blocker
+      - name: Generate Android Project & Period-based Time Progress UI
         run: |
           mkdir -p app/src/main/java/com/example/habbit
           mkdir -p app/src/main/res/layout
@@ -74,8 +74,8 @@ jobs:
                   applicationId "com.example.habbit"
                   minSdk 26
                   targetSdk 34
-                  versionCode 3
-                  versionName "3.0"
+                  versionCode 5
+                  versionName "5.0"
               }
 
               buildTypes {
@@ -241,17 +241,17 @@ jobs:
               val id: String,
               val name: String,
               val color: String,
-              val type: String, // "bool" (On/Off) or "num" (수치 기준 체크)
+              val type: String,
               val unit: String,
-              val target: Int,  // 수치형 달성 기준값 (이 값 이상이어야 달성으로 인정)
-              val blockedPkg: String, // 콤마(,)로 구분된 차단 앱 패키지명 목록
-              val blockedAppName: String, // 콤마(,)로 구분된 차단 앱 이름 목록
-              val days: IntArray, // 최근 60일 기록 (index 0 = 오늘, 0..59 = 최근 60일)
+              val target: Int,
+              val blockedPkg: String,
+              val blockedAppName: String,
+              val days: IntArray,
               val rateDay: Int,
               val rateWeek: Int,
               val rateMonth: Int,
               val rateYear: Int,
-              val rate60Days: Int // 위젯 전용 최근 60일 달성율
+              val rate60Days: Int
           )
 
           object HabbitStorage {
@@ -282,7 +282,6 @@ jobs:
                   return ((achieved.toDouble() / count.toDouble()) * 100.0).roundToInt().coerceIn(0, 100)
               }
 
-              // 1x1 위젯 전용: 항상 최근 60일 기준으로 달성율 계산
               fun getRate60Days(item: HabitItem): Int {
                   return computeRate(item.days, item.type, item.target, 60)
               }
@@ -312,7 +311,6 @@ jobs:
                       val type = o.optString("type", "bool")
                       val target = o.optInt("target", 1).coerceAtLeast(1)
                       val dArr = o.getJSONArray("days")
-                      // 항상 60일 배열 유지
                       val days = IntArray(60) { idx ->
                           if (idx < dArr.length()) dArr.getInt(idx) else 0
                       }
@@ -320,7 +318,7 @@ jobs:
                       val rateWeek = computeRate(days, type, target, 7)
                       val rateMonth = computeRate(days, type, target, 30)
                       val rate60 = computeRate(days, type, target, 60)
-                      val rateYear = o.optInt("rateYear", rate60)
+                      val rateYear = computeRate(days, type, target, 365)
 
                       list.add(
                           HabitItem(
@@ -478,7 +476,6 @@ jobs:
                           }
                       }
 
-                      // 실행을 시도한 앱의 표시 이름 추출
                       val pkgList = firstHabit.blockedPkg.split(",").map { it.trim() }
                       val nameList = firstHabit.blockedAppName.split(",").map { it.trim() }
                       val idx = pkgList.indexOf(pkg)
@@ -691,7 +688,6 @@ jobs:
                       if (habits.isEmpty()) return
                       val habit = habits.find { it.id == habitId } ?: habits.first()
 
-                      // 1x1 홈 위젯의 프로그레시브 바는 항상 최근 60일 달성율을 기준으로 계산
                       val pct60Days = HabbitStorage.getRate60Days(habit)
 
                       val bmp = renderOneByOneWidget(habit, pct60Days)
@@ -1020,12 +1016,12 @@ jobs:
             .card { background: #fff; margin-bottom: 8px; padding: 14px 16px; border-bottom: 1px solid #e5e7eb; }
             .card-title { font-size: 13px; font-weight: 700; margin-bottom: 10px; }
             .overview-row { display: flex; justify-content: space-between; align-items: center; text-align: center; }
-            .bar-wrap { display: flex; align-items: flex-end; height: 120px; gap: 6px; padding-top: 16px; border-bottom: 1px solid #eee; }
+            .bar-wrap { display: flex; align-items: flex-end; height: 130px; gap: 6px; padding-top: 16px; border-bottom: 1px solid #eee; }
             .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
-            .bar-fill { width: 12px; border-radius: 2px 2px 0 0; }
-            .bar-lbl { font-size: 9px; color: #888; margin-top: 4px; }
-            .grid-60 { display: grid; grid-template-columns: repeat(10, 1fr); gap: 5px; margin-top: 8px; }
-            .grid-60-cell { padding: 6px 2px; text-align: center; border-radius: 5px; font-size: 10px; font-weight: 700; border: 1px solid #e5e7eb; cursor: pointer; }
+            .bar-fill { width: 16px; border-radius: 3px 3px 0 0; }
+            .bar-lbl { font-size: 9px; color: #666; margin-top: 4px; text-align: center; }
+            .grid-60 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 8px; }
+            .grid-60-cell { padding: 7px 2px; text-align: center; border-radius: 6px; font-weight: 700; border: 1px solid #e5e7eb; cursor: pointer; }
             .fab { position: fixed; right: 18px; bottom: 18px; width: 52px; height: 52px; border-radius: 26px; background: #00acc1; color: #fff; font-size: 28px; border: none; box-shadow: 0 4px 10px rgba(0,0,0,0.25); z-index: 20; }
             .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; padding: 14px; z-index: 100; }
             .modal-box { background: #fff; width: 100%; max-width: 420px; border-radius: 14px; padding: 16px; max-height: 92vh; overflow-y: auto; }
@@ -1064,7 +1060,6 @@ jobs:
             let blockerEnabled = false;
             let installedApps = [];
             let appSearchQuery = '';
-            const dayLabels = [['일',8],['토',7],['금',6],['목',5],['수',4],['화',3]];
             const palette = ['#00acc1','#fb8c00','#7cb342','#d81b60','#8e24aa','#1e88e5','#e53935','#3949ab'];
             const presetApps = [
               { name: 'YouTube', pkg: 'com.google.android.youtube' },
@@ -1076,6 +1071,32 @@ jobs:
               { name: '네이버 웹툰', pkg: 'com.nhn.android.webtoon' },
               { name: 'X(트위터)', pkg: 'com.twitter.android' }
             ];
+
+            function getDateInfo(daysAgo) {
+              const d = new Date();
+              d.setDate(d.getDate() - daysAgo);
+              const m = d.getMonth() + 1;
+              const date = d.getDate();
+              const korDays = ['일','월','화','수','목','금','토'];
+              const dow = korDays[d.getDay()];
+              return {
+                year: d.getFullYear(),
+                month: m,
+                d: date,
+                dow: dow,
+                shortLabel: m + '/' + date + '(' + dow + ')',
+                fullLabel: m + '월 ' + date + '일(' + dow + '요일)'
+              };
+            }
+
+            function getRecent6DayLabels() {
+              const arr = [];
+              for (let i = 0; i < 6; i++) {
+                const info = getDateInfo(i);
+                arr.push([info.dow, info.month + '/' + info.d]);
+              }
+              return arr;
+            }
 
             function ensure60Days(h) {
               if (!Array.isArray(h.days)) h.days = [];
@@ -1101,12 +1122,110 @@ jobs:
               return Math.round((ok / n) * 100);
             }
 
+            // 특정 구간(예: 특정 월, 특정 주)의 달성율 계산 함수
+            function calcCustomRangeRate(h, startIndex, length) {
+              ensure60Days(h);
+              let achieved = 0;
+              let counted = 0;
+              const minTarget = h.target || 1;
+              for (let i = startIndex; i < startIndex + length && i < h.days.length; i++) {
+                const v = h.days[i];
+                const ok = (h.type === 'num') ? (v >= minTarget) : (v > 0);
+                if (ok) achieved++;
+                counted++;
+              }
+              if (counted === 0) return 0;
+              return Math.round((achieved / counted) * 100);
+            }
+
+            // 1. 일별 시간별 진도 데이터 (최근 10일)
+            function getDailyProgressData(h) {
+              ensure60Days(h);
+              const result = [];
+              for (let i = 9; i >= 0; i--) {
+                const info = getDateInfo(i);
+                const ok = isAchieved(h, i);
+                const val = h.days[i] || 0;
+                result.push({
+                  label: info.month + '/' + info.d + '(' + info.dow + ')',
+                  rate: ok ? 100 : 0,
+                  valText: h.type === 'num' ? (val + h.unit) : (ok ? '달성' : '미달')
+                });
+              }
+              return result;
+            }
+
+            // 2. 주별 시간별 진도 데이터 (최근 6주)
+            function getWeeklyProgressData(h) {
+              ensure60Days(h);
+              const result = [];
+              for (let w = 5; w >= 0; w--) {
+                const start = w * 7;
+                const rate = calcCustomRangeRate(h, start, 7);
+                result.push({
+                  label: (w === 0 ? '이번 주' : (w + '주 전')),
+                  rate: rate,
+                  valText: rate + '%'
+                });
+              }
+              return result;
+            }
+
+            // 3. 월별 시간별 진도 데이터 (최근 4개월: 예 8월, 9월, 10월, 11월)
+            function getMonthlyProgressData(h) {
+              ensure60Days(h);
+              const result = [];
+              // 약 30일씩 끊어서 최근 4개월(현재 기준 역순) 분할
+              const monthNames = [];
+              for (let m = 3; m >= 0; m--) {
+                const d = new Date();
+                d.setMonth(d.getMonth() - m);
+                monthNames.push((d.getMonth() + 1) + '월');
+              }
+              for (let mIdx = 3; mIdx >= 0; mIdx--) {
+                const start = mIdx * 15; // 15일 단위 구간 분석
+                const rate = calcCustomRangeRate(h, start, 15);
+                const targetMonthName = monthNames[3 - mIdx] || (mIdx + '달전');
+                result.push({
+                  label: targetMonthName,
+                  rate: rate,
+                  valText: rate + '%'
+                });
+              }
+              return result;
+            }
+
+            // 4. 연별 시간별 진도 데이터 (최근 연도별)
+            function getYearlyProgressData(h) {
+              ensure60Days(h);
+              const currentYear = new Date().getFullYear();
+              const result = [];
+              for (let y = 2; y >= 0; y--) {
+                const targetYear = currentYear - y;
+                const rate = (y === 0) ? calcWindowRate(h, 60) : (h.rateYear || 45);
+                result.push({
+                  label: targetYear + '년',
+                  rate: rate,
+                  valText: rate + '%'
+                });
+              }
+              return result;
+            }
+
+            function getProgressDataForCurrentPeriod(h) {
+              if (period === 'day') return getDailyProgressData(h);
+              if (period === 'week') return getWeeklyProgressData(h);
+              if (period === 'year') return getYearlyProgressData(h);
+              return getMonthlyProgressData(h); // default month
+            }
+
             function recalcRates(h) {
               ensure60Days(h);
               h.rateDay = calcWindowRate(h, 1);
               h.rateWeek = calcWindowRate(h, 7);
               h.rateMonth = calcWindowRate(h, 30);
               h.rate60Days = calcWindowRate(h, 60);
+              h.rateYear = calcWindowRate(h, 365);
             }
 
             function parseBlockedApps(h) {
@@ -1140,7 +1259,6 @@ jobs:
               render();
             }
 
-            // 앱 내부 화면에서 선택된 탭(일별/주별/월별/연별)에 따른 달성율 반환
             function getAppViewRate(h) {
               if (period === 'day') return h.rateDay;
               if (period === 'week') return h.rateWeek;
@@ -1168,7 +1286,7 @@ jobs:
             function openNumberInputModal(hIdx, dIdx) {
               const h = habits[hIdx];
               const curVal = h.days[dIdx] || 0;
-              const dayTitle = dIdx < 6 ? (dayLabels[dIdx][0] + '요일(' + dayLabels[dIdx][1] + '일)') : (dIdx + '일 전');
+              const dayTitle = getDateInfo(dIdx).fullLabel;
               const modalRoot = document.getElementById('modal-root');
               modalRoot.innerHTML =
                 '<div class="modal-backdrop" onclick="closeModal()">' +
@@ -1388,7 +1506,7 @@ jobs:
                           '<div style="font-size:11px;color:#555;margin-bottom:4px;font-weight:600">내 휴대폰에 설치된 앱에서 여러 개 체크:</div>' +
                           '<input id="ed-app-search" class="form-input" style="padding:6px 8px;font-size:12px" placeholder="앱 이름 검색..." value="' + appSearchQuery + '" oninput="onAppSearchInput(this)" />' +
                           '<div id="installed-apps-container" class="app-check-list"></div>' +
-                        '</div>'
+                        '</div>' +
                       ) : '') +
                       '<div style="margin-top:8px;display:flex;gap:4px">' +
                         '<input id="ed-custom-name" class="form-input" style="flex:1;padding:6px;font-size:11px" placeholder="앱 이름" />' +
@@ -1457,6 +1575,8 @@ jobs:
 
             function render() {
               const root = document.getElementById('app');
+              const recent6Days = getRecent6DayLabels();
+
               if (selectedHabitId) {
                 const hIdx = habits.findIndex(x => x.id === selectedHabitId);
                 if (hIdx === -1) { selectedHabitId = null; render(); return; }
@@ -1464,8 +1584,10 @@ jobs:
                 const pct = getAppViewRate(h);
                 const blockedApps = parseBlockedApps(h);
                 const todayDone = isAchieved(h, 0);
-                const bars = [h.rateDay, h.rateWeek, h.rateMonth, h.rate60Days, h.rateYear];
-                const barLabels = ['일별(1일)', '주별(7일)', '월별(30일)', '위젯(60일)', '연별(1년)'];
+
+                // 현재 선택된 기간(일별/주별/월별/연별)에 따른 시간별 진도 데이터 가져오기
+                const progressData = getProgressDataForCurrentPeriod(h);
+                const periodTitleMap = { 'day': '일별 시간 진도 (최근 10일)', 'week': '주별 진도 (최근 6주)', 'month': '월별 시간 진도 (월 단위 구분)', 'year': '연별 진도 (연도별)' };
 
                 root.innerHTML =
                   '<div class="detail-header" style="background:' + h.color + '">' +
@@ -1482,7 +1604,7 @@ jobs:
                     ).join('') +
                   '</div>' +
                   '<div class="card">' +
-                    '<div class="card-title" style="color:' + h.color + '">한눈에 보기 (기간별 달성율 & 1x1 위젯 60일 달성율)</div>' +
+                    '<div class="card-title" style="color:' + h.color + '">한눈에 보기 (' + (period==='day'?'일별':period==='week'?'주별':period==='month'?'월별':'연별') + ' 달성율)</div>' +
                     '<div class="overview-row">' +
                       '<div>' + ringSvg(pct, h.color, 36) + '</div>' +
                       '<div><div style="font-weight:700">' + h.rateDay + '%</div><div style="font-size:10px;color:#777">일별(오늘)</div></div>' +
@@ -1493,7 +1615,20 @@ jobs:
                     '</div>' +
                   '</div>' +
                   '<div class="card">' +
-                    '<div class="card-title" style="color:' + h.color + '">당일 상태 및 미달성 시 차단 앱 (' + blockedApps.length + '개)</div>' +
+                    '<div class="card-title" style="color:' + h.color + '">' + (periodTitleMap[period] || '시간별 진도') + '</div>' +
+                    '<div style="font-size:11px;color:#666;margin-bottom:4px">버튼을 바꿀 때마다 해당 단위(월별: 9월/10월/11월 등)별 달성 진도가 실시간 반영됩니다.</div>' +
+                    '<div class="bar-wrap">' +
+                      progressData.map(item =>
+                        '<div class="bar-col">' +
+                          '<div style="font-size:9px;font-weight:700;color:' + (item.rate > 0 ? h.color : '#999') + ';margin-bottom:2px">' + item.valText + '</div>' +
+                          '<div class="bar-fill" style="height:' + Math.max(8, item.rate) + 'px;background:' + h.color + '"></div>' +
+                          '<div class="bar-lbl">' + item.label + '</div>' +
+                        '</div>'
+                      ).join('') +
+                    '</div>' +
+                  '</div>' +
+                  '<div class="card">' +
+                    '<div class="card-title" style="color:' + h.color + '">당일(' + getDateInfo(0).shortLabel + ') 상태 및 미달성 시 차단 앱 (' + blockedApps.length + '개)</div>' +
                     '<div style="font-size:13px;line-height:1.6">' +
                       '<div>• 당일 달성 여부: <b style="color:' + (todayDone ? h.color : '#ef4444') + '">' +
                         (todayDone ? '달성 완료 (모든 차단 앱 잠금 해제됨)' : '미달성 (' + (h.type === 'num' ? '현재 ' + h.days[0] + h.unit + ' / 기준 ' + h.target + h.unit : 'Off 상태') + ')') +
@@ -1504,25 +1639,14 @@ jobs:
                     '</div>' +
                   '</div>' +
                   '<div class="card">' +
-                    '<div class="card-title" style="color:' + h.color + '">일별 · 주별 · 월별 · 위젯(60일) · 연별 달성율 비교</div>' +
-                    '<div class="bar-wrap">' +
-                      bars.map((v,i) =>
-                        '<div class="bar-col">' +
-                          '<div style="font-size:10px;font-weight:700;color:' + (i===3 ? '#00838f' : '#555') + ';margin-bottom:2px">' + v + '%</div>' +
-                          '<div class="bar-fill" style="width:24px;height:' + Math.max(8, v) + 'px;background:' + (i===3 ? '#00acc1' : h.color) + '"></div>' +
-                          '<div class="bar-lbl">' + barLabels[i] + '</div>' +
-                        '</div>'
-                      ).join('') +
-                    '</div>' +
-                  '</div>' +
-                  '<div class="card">' +
-                    '<div class="card-title" style="color:' + h.color + '">최근 60일 기록 히트맵 (터치하여 수정 → 1x1 위젯 달성율 즉시 반영)</div>' +
+                    '<div class="card-title" style="color:' + h.color + '">최근 60일 날짜별 기록 히트맵 (' + getDateInfo(59).shortLabel + ' ~ ' + getDateInfo(0).shortLabel + ')</div>' +
                     '<div class="grid-60">' +
                       h.days.map((v, dIdx) => {
                         const ok = isAchieved(h, dIdx);
-                        return '<div class="grid-60-cell" onclick="handleCellClick(' + hIdx + ',' + dIdx + ')" style="background:' + (ok ? h.color : '#f3f4f6') + ';color:' + (ok ? '#fff' : '#888') + '">' +
-                          (dIdx === 0 ? '오늘' : (dIdx + '일전')) + '<br>' +
-                          (h.type === 'num' ? (v + h.unit) : (ok ? '✓' : '✕')) +
+                        const dInfo = getDateInfo(dIdx);
+                        return '<div class="grid-60-cell" onclick="handleCellClick(' + hIdx + ',' + dIdx + ')" style="background:' + (ok ? h.color : '#f3f4f6') + ';color:' + (ok ? '#fff' : '#4b5563') + ';border-color:' + (dIdx === 0 ? '#111' : '#e5e7eb') + ';border-width:' + (dIdx === 0 ? '2px' : '1px') + '">' +
+                          '<div style="font-size:9px;opacity:0.92">' + dInfo.shortLabel + '</div>' +
+                          '<div style="font-size:11px;margin-top:2px">' + (h.type === 'num' ? (v + h.unit) : (ok ? '✓' : '✕')) + '</div>' +
                         '</div>';
                       }).join('') +
                     '</div>' +
@@ -1542,18 +1666,18 @@ jobs:
                   '<button class="service-btn" onclick="openAccessibility()">' + (blockerEnabled ? '권한 설정' : '권한 켜기') + '</button>' +
                 '</div>' +
                 '<div class="widget-info-bar">' +
-                  '<span>📌 앱 화면: <b>' + periodLabel + ' 달성율</b> 표시 중</span>' +
+                  '<span>📌 앱 화면: <b>' + periodLabel + ' 시간별 진도</b> 표시 중</span>' +
                   '<span>📱 1x1 홈 위젯: <b>최근 60일 달성율</b> 고정 표시</span>' +
                 '</div>' +
                 '<div class="period-tabs">' +
                   ['day','week','month','year'].map(p =>
                     '<button class="period-btn ' + (period===p?'active':'') + '" onclick="setPeriodMode(\'' + p + '\')">' +
-                    (p==='day'?'일별 달성율':p==='week'?'주별 달성율':p==='month'?'월별 달성율':'연별 달성율') + '</button>'
+                    (p==='day'?'일별 진도':p==='week'?'주별 진도':p==='month'?'월별 진도':'연별 진도') + '</button>'
                   ).join('') +
                 '</div>' +
                 '<div class="header-row">' +
-                  '<div class="habit-col">목표 (' + periodLabel + ' 링 / 위젯 60일)</div>' +
-                  dayLabels.map(d => '<div class="day-col">' + d[0] + '<br>' + d[1] + '</div>').join('') +
+                  '<div class="habit-col">목표 (' + periodLabel + ' 진도 / 위젯 60일)</div>' +
+                  recent6Days.map(d => '<div class="day-col">' + d[0] + '<br>' + d[1] + '</div>').join('') +
                 '</div>' +
                 habits.map((h, hIdx) => {
                   const blockedApps = parseBlockedApps(h);

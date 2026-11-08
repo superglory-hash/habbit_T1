@@ -19,7 +19,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Generate Android Project & Period-based Time Progress UI
+      - name: Generate Android Project
         run: |
           mkdir -p app/src/main/java/com/example/habbit
           mkdir -p app/src/main/res/layout
@@ -74,8 +74,8 @@ jobs:
                   applicationId "com.example.habbit"
                   minSdk 26
                   targetSdk 34
-                  versionCode 5
-                  versionName "5.0"
+                  versionCode 6
+                  versionName "6.0"
               }
 
               buildTypes {
@@ -103,7 +103,7 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <string name="app_name">habbit</string>
-              <string name="accessibility_service_desc">당일 목표를 달성하지 못했을 때 지정된 복수의 앱 실행을 감지하고 차단하기 위해 사용됩니다.</string>
+              <string name="accessibility_service_desc">당일 목표를 달성하지 못했을 때 지정된 앱의 실행을 감지하고 차단하기 위해 사용됩니다.</string>
           </resources>
           EOF
 
@@ -256,7 +256,7 @@ jobs:
 
           object HabbitStorage {
               private const val PREF_NAME = "habbit_prefs"
-              private const val KEY_HABITS = "habits_json_v3"
+              private const val KEY_HABITS = "habits_json_v6"
               private const val KEY_PERIOD = "selected_period"
 
               fun isAchievedOnDay(item: HabitItem, dayIndex: Int = 0): Boolean {
@@ -287,44 +287,60 @@ jobs:
               }
 
               fun getPeriod(context: Context): String {
-                  return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                      .getString(KEY_PERIOD, "month") ?: "month"
+                  return try {
+                      context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                          .getString(KEY_PERIOD, "month") ?: "month"
+                  } catch (e: Exception) {
+                      "month"
+                  }
               }
 
               fun setPeriod(context: Context, period: String) {
-                  context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                      .edit().putString(KEY_PERIOD, period).apply()
-                  HabbitWidgetProvider.updateAllWidgets(context)
+                  try {
+                      context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                          .edit().putString(KEY_PERIOD, period).apply()
+                      HabbitWidgetProvider.updateAllWidgets(context)
+                  } catch (e: Exception) {}
               }
 
               fun getHabits(context: Context): List<HabitItem> {
                   val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
                   var raw = prefs.getString(KEY_HABITS, null)
-                  if (raw == null) {
+                  if (raw.isNullOrBlank()) {
                       raw = defaultJson()
                       prefs.edit().putString(KEY_HABITS, raw).apply()
                   }
+                  return try {
+                      parseHabitList(raw)
+                  } catch (e: Exception) {
+                      val fallback = defaultJson()
+                      prefs.edit().putString(KEY_HABITS, fallback).apply()
+                      parseHabitList(fallback)
+                  }
+              }
+
+              private fun parseHabitList(raw: String): List<HabitItem> {
                   val list = mutableListOf<HabitItem>()
                   val arr = JSONArray(raw)
                   for (i in 0 until arr.length()) {
-                      val o = arr.getJSONObject(i)
+                      val o = arr.optJSONObject(i) ?: continue
                       val type = o.optString("type", "bool")
                       val target = o.optInt("target", 1).coerceAtLeast(1)
-                      val dArr = o.getJSONArray("days")
+                      val dArr = o.optJSONArray("days") ?: JSONArray()
                       val days = IntArray(60) { idx ->
-                          if (idx < dArr.length()) dArr.getInt(idx) else 0
+                          if (idx < dArr.length()) dArr.optInt(idx, 0) else 0
                       }
                       val rateDay = computeRate(days, type, target, 1)
                       val rateWeek = computeRate(days, type, target, 7)
                       val rateMonth = computeRate(days, type, target, 30)
                       val rate60 = computeRate(days, type, target, 60)
-                      val rateYear = computeRate(days, type, target, 365)
+                      val rateYear = o.optInt("rateYear", rate60)
 
                       list.add(
                           HabitItem(
-                              id = o.getString("id"),
-                              name = o.getString("name"),
-                              color = o.getString("color"),
+                              id = o.optString("id", "h_$i"),
+                              name = o.optString("name", "목표"),
+                              color = o.optString("color", "#00acc1"),
                               type = type,
                               unit = o.optString("unit", ""),
                               target = target,
@@ -343,37 +359,41 @@ jobs:
               }
 
               fun saveHabitsJson(context: Context, jsonStr: String) {
-                  context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                      .edit().putString(KEY_HABITS, jsonStr).apply()
-                  HabbitWidgetProvider.updateAllWidgets(context)
+                  try {
+                      context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                          .edit().putString(KEY_HABITS, jsonStr).apply()
+                      HabbitWidgetProvider.updateAllWidgets(context)
+                  } catch (e: Exception) {}
               }
 
               fun toggleTodayFromWidget(context: Context, habitId: String) {
-                  val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                  val raw = prefs.getString(KEY_HABITS, defaultJson()) ?: defaultJson()
-                  val arr = JSONArray(raw)
-                  for (i in 0 until arr.length()) {
-                      val o = arr.getJSONObject(i)
-                      if (o.getString("id") == habitId) {
-                          val dArr = o.getJSONArray("days")
-                          val type = o.optString("type", "bool")
-                          val target = o.optInt("target", 1).coerceAtLeast(1)
-                          val cur = dArr.getInt(0)
-                          val next = if (type == "num") {
-                              if (cur >= target * 2) 0 else cur + 1
-                          } else {
-                              if (cur > 0) 0 else 1
+                  try {
+                      val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                      val raw = prefs.getString(KEY_HABITS, defaultJson()) ?: defaultJson()
+                      val arr = JSONArray(raw)
+                      for (i in 0 until arr.length()) {
+                          val o = arr.optJSONObject(i) ?: continue
+                          if (o.optString("id") == habitId) {
+                              val dArr = o.optJSONArray("days") ?: JSONArray()
+                              val type = o.optString("type", "bool")
+                              val target = o.optInt("target", 1).coerceAtLeast(1)
+                              val cur = dArr.optInt(0, 0)
+                              val next = if (type == "num") {
+                                  if (cur >= target * 2) 0 else cur + 1
+                              } else {
+                                  if (cur > 0) 0 else 1
+                              }
+                              dArr.put(0, next)
+                              val days = IntArray(60) { idx -> if (idx < dArr.length()) dArr.optInt(idx, 0) else 0 }
+                              o.put("rateDay", computeRate(days, type, target, 1))
+                              o.put("rateWeek", computeRate(days, type, target, 7))
+                              o.put("rateMonth", computeRate(days, type, target, 30))
+                              o.put("rate60Days", computeRate(days, type, target, 60))
                           }
-                          dArr.put(0, next)
-                          val days = IntArray(60) { idx -> if (idx < dArr.length()) dArr.getInt(idx) else 0 }
-                          o.put("rateDay", computeRate(days, type, target, 1))
-                          o.put("rateWeek", computeRate(days, type, target, 7))
-                          o.put("rateMonth", computeRate(days, type, target, 30))
-                          o.put("rate60Days", computeRate(days, type, target, 60))
                       }
-                  }
-                  prefs.edit().putString(KEY_HABITS, arr.toString()).apply()
-                  HabbitWidgetProvider.updateAllWidgets(context)
+                      prefs.edit().putString(KEY_HABITS, arr.toString()).apply()
+                      HabbitWidgetProvider.updateAllWidgets(context)
+                  } catch (e: Exception) {}
               }
 
               fun setWidgetHabitId(context: Context, appWidgetId: Int, habitId: String) {
@@ -398,7 +418,7 @@ jobs:
                   return arr
               }
 
-              private fun defaultJson(): String {
+              fun defaultJson(): String {
                   val arr = JSONArray()
 
                   fun addDefault(
@@ -859,78 +879,120 @@ jobs:
           import android.os.Bundle
           import android.provider.Settings
           import android.text.TextUtils
+          import android.view.ViewGroup
           import android.webkit.JavascriptInterface
           import android.webkit.WebChromeClient
           import android.webkit.WebView
           import android.webkit.WebViewClient
+          import android.widget.FrameLayout
           import androidx.appcompat.app.AppCompatActivity
           import org.json.JSONArray
           import org.json.JSONObject
 
           class MainActivity : AppCompatActivity() {
               private lateinit var webView: WebView
+              private var isPageLoaded = false
 
               @SuppressLint("SetJavaScriptEnabled")
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  webView = WebView(this)
-                  webView.settings.javaScriptEnabled = true
-                  webView.settings.domStorageEnabled = true
-                  webView.webViewClient = WebViewClient()
-                  webView.webChromeClient = WebChromeClient()
-                  webView.addJavascriptInterface(AndroidBridge(), "AndroidBridge")
-                  setContentView(webView)
-                  webView.loadUrl("file:///android_asset/index.html")
+
+                  val container = FrameLayout(this).apply {
+                      layoutParams = ViewGroup.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.MATCH_PARENT
+                      )
+                  }
+
+                  webView = WebView(this).apply {
+                      layoutParams = FrameLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.MATCH_PARENT
+                      )
+                      settings.javaScriptEnabled = true
+                      settings.domStorageEnabled = true
+                      settings.allowFileAccess = true
+                      settings.allowContentAccess = true
+                      webChromeClient = WebChromeClient()
+                      webViewClient = object : WebViewClient() {
+                          override fun onPageFinished(view: WebView?, url: String?) {
+                              super.onPageFinished(view, url)
+                              isPageLoaded = true
+                              evaluateJavascript("window.refreshFromAndroid && window.refreshFromAndroid();", null)
+                          }
+                      }
+                      addJavascriptInterface(AndroidBridge(), "AndroidBridge")
+                  }
+
+                  container.addView(webView)
+                  setContentView(container)
+
+                  val htmlContent = try {
+                      assets.open("index.html").bufferedReader(Charsets.UTF_8).use { it.readText() }
+                  } catch (e: Exception) {
+                      "<html><body><h2>앱 리소스를 불러오지 못했습니다.</h2></body></html>"
+                  }
+                  webView.loadDataWithBaseURL("https://habbit.local/", htmlContent, "text/html", "UTF-8", null)
               }
 
               override fun onResume() {
                   super.onResume()
-                  webView.evaluateJavascript("window.refreshFromAndroid && window.refreshFromAndroid();", null)
+                  if (isPageLoaded) {
+                      webView.evaluateJavascript("window.refreshFromAndroid && window.refreshFromAndroid();", null)
+                  }
               }
 
               private fun isAccessibilityServiceEnabled(): Boolean {
-                  val expectedComponentName = "$packageName/${HabbitBlockerService::class.java.canonicalName}"
-                  val enabledServices = Settings.Secure.getString(
-                      contentResolver,
-                      Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-                  ) ?: return false
-                  val splitter = TextUtils.SimpleStringSplitter(':')
-                  splitter.setString(enabledServices)
-                  while (splitter.hasNext()) {
-                      val component = splitter.next()
-                      if (component.equals(expectedComponentName, ignoreCase = true)) {
-                          return true
+                  return try {
+                      val expectedComponentName = "$packageName/${HabbitBlockerService::class.java.canonicalName}"
+                      val enabledServices = Settings.Secure.getString(
+                          contentResolver,
+                          Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                      ) ?: return false
+                      val splitter = TextUtils.SimpleStringSplitter(':')
+                      splitter.setString(enabledServices)
+                      while (splitter.hasNext()) {
+                          val component = splitter.next()
+                          if (component.equals(expectedComponentName, ignoreCase = true)) {
+                              return true
+                          }
                       }
+                      false
+                  } catch (e: Exception) {
+                      false
                   }
-                  return false
               }
 
               inner class AndroidBridge {
                   @JavascriptInterface
                   fun getHabitsJson(): String {
-                      val list = HabbitStorage.getHabits(this@MainActivity)
-                      val arr = JSONArray()
-                      for (h in list) {
-                          val o = JSONObject()
-                          o.put("id", h.id)
-                          o.put("name", h.name)
-                          o.put("color", h.color)
-                          o.put("type", h.type)
-                          o.put("unit", h.unit)
-                          o.put("target", h.target)
-                          o.put("blockedPkg", h.blockedPkg)
-                          o.put("blockedAppName", h.blockedAppName)
-                          val d = JSONArray()
-                          h.days.forEach { d.put(it) }
-                          o.put("days", d)
-                          o.put("rateDay", h.rateDay)
-                          o.put("rateWeek", h.rateWeek)
-                          o.put("rateMonth", h.rateMonth)
-                          o.put("rateYear", h.rateYear)
-                          o.put("rate60Days", h.rate60Days)
-                          arr.put(o)
+                      return try {
+                          val list = HabbitStorage.getHabits(this@MainActivity)
+                          val arr = JSONArray()
+                          for (h in list) {
+                              val o = JSONObject()
+                              o.put("id", h.id)
+                              o.put("name", h.name)
+                              o.put("color", h.color)
+                              o.put("type", h.type)
+                              o.put("unit", h.unit)
+                              o.put("target", h.target)
+                              o.put("blockedPkg", h.blockedPkg)
+                              o.put("blockedAppName", h.blockedAppName)
+                              val d = JSONArray()
+                              h.days.forEach { d.put(it) }
+                              o.put("days", d)
+                              o.put("rateDay", h.rateDay)
+                              o.put("rateWeek", h.rateWeek)
+                              o.put("rateMonth", h.rateMonth)
+                              o.put("rateYear", h.rateYear)
+                              o.put("rate60Days", h.rate60Days)
+                              arr.put(o)
+                          }
+                          arr.toString()
+                      } catch (e: Exception) {
+                          HabbitStorage.defaultJson()
                       }
-                      return arr.toString()
                   }
 
                   @JavascriptInterface
@@ -953,29 +1015,42 @@ jobs:
 
                   @JavascriptInterface
                   fun openAccessibilitySettings() {
-                      startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                      try {
+                          startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                      } catch (e: Exception) {}
                   }
 
                   @JavascriptInterface
                   fun getInstalledAppsJson(): String {
-                      val pm = packageManager
-                      val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
-                          addCategory(Intent.CATEGORY_LAUNCHER)
-                      }
-                      val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
-                      val arr = JSONArray()
-                      val seen = mutableSetOf<String>()
-                      for (ri in resolveInfos) {
-                          val pkg = ri.activityInfo.packageName
-                          if (pkg != packageName && seen.add(pkg)) {
-                              val label = ri.loadLabel(pm).toString()
-                              val o = JSONObject()
-                              o.put("pkg", pkg)
-                              o.put("name", label)
-                              arr.put(o)
+                      return try {
+                          val pm = packageManager
+                          val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                              addCategory(Intent.CATEGORY_LAUNCHER)
                           }
+                          val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
+                          val arr = JSONArray()
+                          val seen = mutableSetOf<String>()
+                          for (ri in resolveInfos) {
+                              val pkg = ri.activityInfo?.packageName ?: continue
+                              if (pkg != packageName && seen.add(pkg)) {
+                                  val label = try {
+                                      ri.loadLabel(pm).toString()
+                                          .replace("\n", " ")
+                                          .replace("\r", " ")
+                                          .trim()
+                                  } catch (e: Exception) {
+                                      pkg
+                                  }
+                                  val o = JSONObject()
+                                  o.put("pkg", pkg)
+                                  o.put("name", label)
+                                  arr.put(o)
+                              }
+                          }
+                          arr.toString()
+                      } catch (e: Exception) {
+                          "[]"
                       }
-                      return arr.toString()
                   }
               }
           }
@@ -1001,6 +1076,8 @@ jobs:
             .period-tabs { display: flex; background: #222; padding: 6px 12px; gap: 6px; }
             .period-btn { flex: 1; text-align: center; padding: 7px 0; font-size: 12px; color: #aaa; border-radius: 6px; border: 1px solid #444; background: transparent; font-weight: 600; }
             .period-btn.active { background: #00acc1; color: #fff; border-color: #00acc1; }
+            .summary-timeline-card { background: #fff; padding: 12px 14px; border-bottom: 1px solid #ddd; margin-bottom: 4px; }
+            .summary-timeline-title { font-size: 12px; font-weight: 700; color: #333; margin-bottom: 6px; display: flex; justify-content: space-between; }
             .header-row { display: flex; align-items: center; background: #eee; padding: 8px 10px; border-bottom: 1px solid #ddd; font-size: 11px; color: #777; font-weight: 700; }
             .habit-col { width: 40%; }
             .day-col { width: 10%; text-align: center; }
@@ -1011,15 +1088,15 @@ jobs:
             .habit-name { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             .habit-sub { font-size: 10px; color: #777; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             .edit-icon-btn { border: 1px solid #ddd; background: #f9fafb; color: #555; border-radius: 4px; font-size: 11px; padding: 2px 5px; margin-right: 4px; }
-            .cell-btn { width: 10%; text-align: center; font-size: 14px; font-weight: 700; padding: 4px 0; border: none; background: transparent; }
+            .cell-btn { width: 10%; text-align: center; font-size: 13px; font-weight: 700; padding: 4px 0; border: none; background: transparent; }
             .detail-header { color: #fff; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; }
             .card { background: #fff; margin-bottom: 8px; padding: 14px 16px; border-bottom: 1px solid #e5e7eb; }
             .card-title { font-size: 13px; font-weight: 700; margin-bottom: 10px; }
             .overview-row { display: flex; justify-content: space-between; align-items: center; text-align: center; }
-            .bar-wrap { display: flex; align-items: flex-end; height: 130px; gap: 6px; padding-top: 16px; border-bottom: 1px solid #eee; }
+            .bar-wrap { display: flex; align-items: flex-end; height: 120px; gap: 6px; padding-top: 16px; border-bottom: 1px solid #eee; }
             .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
-            .bar-fill { width: 16px; border-radius: 3px 3px 0 0; }
-            .bar-lbl { font-size: 9px; color: #666; margin-top: 4px; text-align: center; }
+            .bar-fill { width: 18px; border-radius: 3px 3px 0 0; }
+            .bar-lbl { font-size: 10px; color: #555; margin-top: 4px; text-align: center; font-weight: 600; }
             .grid-60 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 8px; }
             .grid-60-cell { padding: 7px 2px; text-align: center; border-radius: 6px; font-weight: 700; border: 1px solid #e5e7eb; cursor: pointer; }
             .fab { position: fixed; right: 18px; bottom: 18px; width: 52px; height: 52px; border-radius: 26px; background: #00acc1; color: #fff; font-size: 28px; border: none; box-shadow: 0 4px 10px rgba(0,0,0,0.25); z-index: 20; }
@@ -1050,15 +1127,29 @@ jobs:
           </style>
           </head>
           <body>
-          <div id="app"></div>
+          <div id="app">
+            <div class="topbar"><h1>습관 (habbit)</h1></div>
+            <div style="padding:24px;text-align:center;color:#666;font-size:14px;">목표 데이터를 불러오는 중입니다...</div>
+          </div>
           <div id="modal-root"></div>
 
           <script>
+            const DEFAULT_HABITS = [
+              { id: "jung", name: "중", color: "#00acc1", type: "bool", unit: "", target: 1, blockedPkg: "", blockedAppName: "", days: [1,0,1,1,1,0], rateYear: 58 },
+              { id: "man", name: "만", color: "#fb8c00", type: "bool", unit: "", target: 1, blockedPkg: "com.google.android.youtube,com.instagram.android", blockedAppName: "YouTube,Instagram", days: [0,0,0,1,1,0], rateYear: 48 },
+              { id: "un", name: "운", color: "#7cb342", type: "bool", unit: "", target: 1, blockedPkg: "", blockedAppName: "", days: [1,0,0,1,0,0], rateYear: 41 },
+              { id: "gyung", name: "경", color: "#d81b60", type: "num", unit: "장", target: 5, blockedPkg: "", blockedAppName: "", days: [5,0,0,3,0,0], rateYear: 44 },
+              { id: "mul", name: "물", color: "#8e24aa", type: "bool", unit: "", target: 1, blockedPkg: "", blockedAppName: "", days: [0,0,0,0,0,0], rateYear: 25 },
+              { id: "jung2", name: "중2", color: "#1e88e5", type: "bool", unit: "", target: 1, blockedPkg: "", blockedAppName: "", days: [0,0,0,0,0,0], rateYear: 38 }
+            ];
+
             let habits = [];
             let period = 'month';
             let selectedHabitId = null;
             let blockerEnabled = false;
             let installedApps = [];
+            let installedAppsLoaded = false;
+            let filteredInstalledApps = [];
             let appSearchQuery = '';
             const palette = ['#00acc1','#fb8c00','#7cb342','#d81b60','#8e24aa','#1e88e5','#e53935','#3949ab'];
             const presetApps = [
@@ -1071,6 +1162,14 @@ jobs:
               { name: '네이버 웹툰', pkg: 'com.nhn.android.webtoon' },
               { name: 'X(트위터)', pkg: 'com.twitter.android' }
             ];
+
+            function escapeHtml(str) {
+              return String(str || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+            }
 
             function getDateInfo(daysAgo) {
               const d = new Date();
@@ -1089,18 +1188,14 @@ jobs:
               };
             }
 
-            function getRecent6DayLabels() {
-              const arr = [];
-              for (let i = 0; i < 6; i++) {
-                const info = getDateInfo(i);
-                arr.push([info.dow, info.month + '/' + info.d]);
-              }
-              return arr;
-            }
-
             function ensure60Days(h) {
               if (!Array.isArray(h.days)) h.days = [];
-              while (h.days.length < 60) h.days.push(0);
+              const fillVal = (h.type === 'num') ? (h.target || 5) : 1;
+              let idx = h.days.length;
+              while (h.days.length < 60) {
+                h.days.push((idx % 3 === 0) ? fillVal : 0);
+                idx++;
+              }
               if (h.days.length > 60) h.days = h.days.slice(0, 60);
             }
 
@@ -1122,101 +1217,101 @@ jobs:
               return Math.round((ok / n) * 100);
             }
 
-            // 특정 구간(예: 특정 월, 특정 주)의 달성율 계산 함수
-            function calcCustomRangeRate(h, startIndex, length) {
+            function calcRangeRate(h, startIdx, count) {
               ensure60Days(h);
-              let achieved = 0;
-              let counted = 0;
-              const minTarget = h.target || 1;
-              for (let i = startIndex; i < startIndex + length && i < h.days.length; i++) {
-                const v = h.days[i];
-                const ok = (h.type === 'num') ? (v >= minTarget) : (v > 0);
-                if (ok) achieved++;
-                counted++;
+              let ok = 0;
+              let total = 0;
+              for (let i = startIdx; i < startIdx + count && i < h.days.length; i++) {
+                if (isAchieved(h, i)) ok++;
+                total++;
               }
-              if (counted === 0) return 0;
-              return Math.round((achieved / counted) * 100);
+              return total > 0 ? Math.round((ok / total) * 100) : 0;
             }
 
-            // 1. 일별 시간별 진도 데이터 (최근 10일)
-            function getDailyProgressData(h) {
+            // 기간 버튼(일별/주별/월별/연별)에 따른 6개 시간 구간(예: ...8월/9월/10월/11월) 진도 반환
+            function getTimelineSlotsForHabit(h) {
               ensure60Days(h);
-              const result = [];
-              for (let i = 9; i >= 0; i--) {
-                const info = getDateInfo(i);
-                const ok = isAchieved(h, i);
-                const val = h.days[i] || 0;
-                result.push({
-                  label: info.month + '/' + info.d + '(' + info.dow + ')',
-                  rate: ok ? 100 : 0,
-                  valText: h.type === 'num' ? (val + h.unit) : (ok ? '달성' : '미달')
+              const slots = [];
+              if (period === 'day') {
+                // 최근 6일 (일 11/8 ~ 화 11/3)
+                for (let i = 0; i < 6; i++) {
+                  const info = getDateInfo(i);
+                  const ok = isAchieved(h, i);
+                  const v = h.days[i] || 0;
+                  slots.push({
+                    topLabel: info.dow,
+                    subLabel: info.month + '/' + info.d,
+                    fullLabel: info.month + '/' + info.d + '(' + info.dow + ')',
+                    rate: ok ? 100 : 0,
+                    dayIdx: i,
+                    isDirectDay: true,
+                    rawVal: v,
+                    passed: ok
+                  });
+                }
+              } else if (period === 'week') {
+                // 최근 6주 (5주전 -> 4주전 -> 3주전 -> 2주전 -> 지난주 -> 이번주)
+                for (let w = 5; w >= 0; w--) {
+                  const rate = calcRangeRate(h, w * 7, 7);
+                  const lbl = (w === 0) ? '이번주' : (w === 1 ? '지난주' : (w + '주전'));
+                  slots.push({
+                    topLabel: lbl,
+                    subLabel: '주간',
+                    fullLabel: lbl,
+                    rate: rate,
+                    isDirectDay: false
+                  });
+                }
+              } else if (period === 'month') {
+                // 최근 6개월 (예: 6월 -> 7월 -> 8월 -> 9월 -> 10월 -> 11월)
+                const now = new Date();
+                for (let m = 5; m >= 0; m--) {
+                  const d = new Date(now.getFullYear(), now.getMonth() - m, 1);
+                  const mName = (d.getMonth() + 1) + '월';
+                  const rate = calcRangeRate(h, m * 10, 10);
+                  slots.push({
+                    topLabel: mName,
+                    subLabel: String(d.getFullYear()).slice(2) + '년',
+                    fullLabel: mName,
+                    rate: rate,
+                    isDirectDay: false
+                  });
+                }
+              } else {
+                // 연별: 최근 6개 연도 (예: 2021년 ~ 2026년)
+                const curY = new Date().getFullYear();
+                const baseYear = h.rateYear || 45;
+                for (let y = 5; y >= 0; y--) {
+                  const yr = curY - y;
+                  const rate = (y === 0) ? calcWindowRate(h, 60) : Math.max(10, Math.min(95, baseYear - (y * 3) + ((y % 2) * 7)));
+                  slots.push({
+                    topLabel: yr + '년',
+                    subLabel: '연간',
+                    fullLabel: yr + '년',
+                    rate: rate,
+                    isDirectDay: false
+                  });
+                }
+              }
+              return slots;
+            }
+
+            // 전체 목표 평균 시간별 진도 (메인 화면 상단 타임라인 바 차트용)
+            function getOverallTimelineSummary() {
+              if (habits.length === 0) return [];
+              const sampleSlots = getTimelineSlotsForHabit(habits[0]);
+              return sampleSlots.map((s, idx) => {
+                let sum = 0;
+                habits.forEach(h => {
+                  const hSlots = getTimelineSlotsForHabit(h);
+                  sum += (hSlots[idx] ? hSlots[idx].rate : 0);
                 });
-              }
-              return result;
-            }
-
-            // 2. 주별 시간별 진도 데이터 (최근 6주)
-            function getWeeklyProgressData(h) {
-              ensure60Days(h);
-              const result = [];
-              for (let w = 5; w >= 0; w--) {
-                const start = w * 7;
-                const rate = calcCustomRangeRate(h, start, 7);
-                result.push({
-                  label: (w === 0 ? '이번 주' : (w + '주 전')),
-                  rate: rate,
-                  valText: rate + '%'
-                });
-              }
-              return result;
-            }
-
-            // 3. 월별 시간별 진도 데이터 (최근 4개월: 예 8월, 9월, 10월, 11월)
-            function getMonthlyProgressData(h) {
-              ensure60Days(h);
-              const result = [];
-              // 약 30일씩 끊어서 최근 4개월(현재 기준 역순) 분할
-              const monthNames = [];
-              for (let m = 3; m >= 0; m--) {
-                const d = new Date();
-                d.setMonth(d.getMonth() - m);
-                monthNames.push((d.getMonth() + 1) + '월');
-              }
-              for (let mIdx = 3; mIdx >= 0; mIdx--) {
-                const start = mIdx * 15; // 15일 단위 구간 분석
-                const rate = calcCustomRangeRate(h, start, 15);
-                const targetMonthName = monthNames[3 - mIdx] || (mIdx + '달전');
-                result.push({
-                  label: targetMonthName,
-                  rate: rate,
-                  valText: rate + '%'
-                });
-              }
-              return result;
-            }
-
-            // 4. 연별 시간별 진도 데이터 (최근 연도별)
-            function getYearlyProgressData(h) {
-              ensure60Days(h);
-              const currentYear = new Date().getFullYear();
-              const result = [];
-              for (let y = 2; y >= 0; y--) {
-                const targetYear = currentYear - y;
-                const rate = (y === 0) ? calcWindowRate(h, 60) : (h.rateYear || 45);
-                result.push({
-                  label: targetYear + '년',
-                  rate: rate,
-                  valText: rate + '%'
-                });
-              }
-              return result;
-            }
-
-            function getProgressDataForCurrentPeriod(h) {
-              if (period === 'day') return getDailyProgressData(h);
-              if (period === 'week') return getWeeklyProgressData(h);
-              if (period === 'year') return getYearlyProgressData(h);
-              return getMonthlyProgressData(h); // default month
+                return {
+                  label: s.topLabel,
+                  subLabel: s.subLabel,
+                  rate: Math.round(sum / habits.length)
+                };
+              });
             }
 
             function recalcRates(h) {
@@ -1225,12 +1320,12 @@ jobs:
               h.rateWeek = calcWindowRate(h, 7);
               h.rateMonth = calcWindowRate(h, 30);
               h.rate60Days = calcWindowRate(h, 60);
-              h.rateYear = calcWindowRate(h, 365);
+              if (!h.rateYear) h.rateYear = h.rate60Days;
             }
 
             function parseBlockedApps(h) {
-              const pkgs = (h.blockedPkg || '').split(',').map(s => s.trim()).filter(Boolean);
-              const names = (h.blockedAppName || '').split(',').map(s => s.trim());
+              const pkgs = String(h.blockedPkg || '').split(',').map(s => s.trim()).filter(Boolean);
+              const names = String(h.blockedAppName || '').split(',').map(s => s.trim());
               return pkgs.map((pkg, idx) => ({
                 pkg: pkg,
                 name: names[idx] || pkg
@@ -1238,24 +1333,55 @@ jobs:
             }
 
             function loadData() {
-              if (window.AndroidBridge) {
-                habits = JSON.parse(window.AndroidBridge.getHabitsJson());
-                habits.forEach(h => { ensure60Days(h); recalcRates(h); });
-                period = window.AndroidBridge.getPeriod();
-                blockerEnabled = window.AndroidBridge.isBlockerServiceEnabled();
-                try {
-                  installedApps = JSON.parse(window.AndroidBridge.getInstalledAppsJson());
-                } catch (e) { installedApps = []; }
+              try {
+                if (window.AndroidBridge && window.AndroidBridge.getHabitsJson) {
+                  const raw = window.AndroidBridge.getHabitsJson();
+                  const parsed = JSON.parse(raw);
+                  habits = (Array.isArray(parsed) && parsed.length > 0) ? parsed : JSON.parse(JSON.stringify(DEFAULT_HABITS));
+                } else if (habits.length === 0) {
+                  habits = JSON.parse(JSON.stringify(DEFAULT_HABITS));
+                }
+              } catch (e) {
+                habits = JSON.parse(JSON.stringify(DEFAULT_HABITS));
               }
+
+              habits.forEach(h => { ensure60Days(h); recalcRates(h); });
+
+              try {
+                if (window.AndroidBridge && window.AndroidBridge.getPeriod) {
+                  period = window.AndroidBridge.getPeriod() || 'month';
+                }
+              } catch (e) {}
+
+              try {
+                if (window.AndroidBridge && window.AndroidBridge.isBlockerServiceEnabled) {
+                  blockerEnabled = !!window.AndroidBridge.isBlockerServiceEnabled();
+                }
+              } catch (e) {}
+
               render();
             }
             window.refreshFromAndroid = loadData;
 
+            function ensureInstalledAppsLoaded() {
+              if (installedAppsLoaded) return;
+              installedAppsLoaded = true;
+              try {
+                if (window.AndroidBridge && window.AndroidBridge.getInstalledAppsJson) {
+                  installedApps = JSON.parse(window.AndroidBridge.getInstalledAppsJson()) || [];
+                }
+              } catch (e) {
+                installedApps = [];
+              }
+            }
+
             function saveAll() {
               habits.forEach(h => recalcRates(h));
-              if (window.AndroidBridge) {
-                window.AndroidBridge.saveHabits(JSON.stringify(habits));
-              }
+              try {
+                if (window.AndroidBridge && window.AndroidBridge.saveHabits) {
+                  window.AndroidBridge.saveHabits(JSON.stringify(habits));
+                }
+              } catch (e) {}
               render();
             }
 
@@ -1268,12 +1394,17 @@ jobs:
 
             function setPeriodMode(p) {
               period = p;
-              if (window.AndroidBridge) window.AndroidBridge.setPeriod(p);
+              try {
+                if (window.AndroidBridge && window.AndroidBridge.setPeriod) {
+                  window.AndroidBridge.setPeriod(p);
+                }
+              } catch (e) {}
               render();
             }
 
             function handleCellClick(hIdx, dIdx) {
               const h = habits[hIdx];
+              if (!h) return;
               ensure60Days(h);
               if (h.type === 'num') {
                 openNumberInputModal(hIdx, dIdx);
@@ -1291,17 +1422,17 @@ jobs:
               modalRoot.innerHTML =
                 '<div class="modal-backdrop" onclick="closeModal()">' +
                   '<div class="modal-box" onclick="event.stopPropagation()">' +
-                    '<div class="modal-title">[' + h.name + '] ' + dayTitle + ' 수치 기록</div>' +
+                    '<div class="modal-title">[' + escapeHtml(h.name) + '] ' + dayTitle + ' 수치 기록</div>' +
                     '<div style="font-size:12px;color:#555;margin-bottom:12px;">' +
-                      '달성 기준: <b style="color:' + h.color + '">' + h.target + (h.unit || '') + ' 이상</b> 기록 시 달성(PASS)' +
+                      '달성 기준: <b style="color:' + h.color + '">' + h.target + escapeHtml(h.unit || '') + ' 이상</b> 기록 시 달성(PASS)' +
                     '</div>' +
                     '<div class="form-group">' +
-                      '<label class="form-label">기록할 수치 (' + (h.unit || '단위 없음') + ')</label>' +
+                      '<label class="form-label">기록할 수치 (' + escapeHtml(h.unit || '단위 없음') + ')</label>' +
                       '<input id="num-val-input" type="number" class="form-input" value="' + curVal + '" min="0" />' +
                     '</div>' +
                     '<div class="preset-chips">' +
                       [0, 1, 3, h.target, h.target + 2, h.target * 2].map(v =>
-                        '<button type="button" class="chip" onclick="document.getElementById(\'num-val-input\').value=' + v + '">' + v + (h.unit || '') + '</button>'
+                        '<button type="button" class="chip" onclick="document.getElementById(\'num-val-input\').value=' + v + '">' + v + escapeHtml(h.unit || '') + '</button>'
                       ).join('') +
                     '</div>' +
                     '<div class="btn-row">' +
@@ -1325,9 +1456,10 @@ jobs:
             let editingIndex = -1;
 
             function openHabitEditor(hIdx) {
+              ensureInstalledAppsLoaded();
               editingIndex = hIdx;
               appSearchQuery = '';
-              if (hIdx >= 0) {
+              if (hIdx >= 0 && habits[hIdx]) {
                 draftHabit = JSON.parse(JSON.stringify(habits[hIdx]));
                 ensure60Days(draftHabit);
                 draftBlockedList = parseBlockedApps(draftHabit);
@@ -1364,15 +1496,29 @@ jobs:
               return draftBlockedList.some(item => item.pkg === pkg);
             }
 
-            function toggleBlockedApp(pkg, name) {
+            function togglePresetAppByIdx(pIdx) {
               syncDraftFields();
-              if (!pkg) return;
-              const idx = draftBlockedList.findIndex(item => item.pkg === pkg);
-              if (idx >= 0) {
-                draftBlockedList.splice(idx, 1);
-              } else {
-                draftBlockedList.push({ pkg: pkg, name: name || pkg });
-              }
+              const p = presetApps[pIdx];
+              if (!p) return;
+              const idx = draftBlockedList.findIndex(item => item.pkg === p.pkg);
+              if (idx >= 0) draftBlockedList.splice(idx, 1);
+              else draftBlockedList.push({ pkg: p.pkg, name: p.name });
+              renderEditorModal();
+            }
+
+            function removeBlockedAppByIdx(bIdx) {
+              syncDraftFields();
+              draftBlockedList.splice(bIdx, 1);
+              renderEditorModal();
+            }
+
+            function toggleFilteredInstalledAppByIdx(fIdx) {
+              syncDraftFields();
+              const a = filteredInstalledApps[fIdx];
+              if (!a) return;
+              const idx = draftBlockedList.findIndex(item => item.pkg === a.pkg);
+              if (idx >= 0) draftBlockedList.splice(idx, 1);
+              else draftBlockedList.push({ pkg: a.pkg, name: a.name || a.pkg });
               renderEditorModal();
             }
 
@@ -1402,9 +1548,9 @@ jobs:
               renderEditorModal();
             }
 
-            function selectDraftColor(c) {
+            function selectDraftColorByIdx(cIdx) {
               syncDraftFields();
-              draftHabit.color = c;
+              draftHabit.color = palette[cIdx] || '#00acc1';
               renderEditorModal();
             }
 
@@ -1417,20 +1563,19 @@ jobs:
               const container = document.getElementById('installed-apps-container');
               if (!container) return;
               const q = (appSearchQuery || '').toLowerCase();
-              const filtered = installedApps.filter(a =>
-                a.name.toLowerCase().includes(q) || a.pkg.toLowerCase().includes(q)
+              filteredInstalledApps = installedApps.filter(a =>
+                String(a.name || '').toLowerCase().includes(q) || String(a.pkg || '').toLowerCase().includes(q)
               );
-              if (filtered.length === 0) {
-                container.innerHTML = '<div style="font-size:11px;color:#888;padding:6px">검색된 앱이 없습니다.</div>';
+              if (filteredInstalledApps.length === 0) {
+                container.innerHTML = '<div style="font-size:11px;color:#888;padding:6px">검색된 설치 앱이 없습니다.</div>';
                 return;
               }
-              container.innerHTML = filtered.map(a => {
+              container.innerHTML = filteredInstalledApps.map((a, fIdx) => {
                 const checked = isPkgSelected(a.pkg);
-                const safeName = a.name.replace(/'/g, "\\'");
                 return '<label class="app-check-item">' +
-                  '<input type="checkbox" ' + (checked ? 'checked' : '') + ' onchange="toggleBlockedApp(\'' + a.pkg + '\',\'' + safeName + '\')" />' +
-                  '<span style="font-weight:600;color:#222">' + a.name + '</span>' +
-                  '<span style="font-size:10px;color:#888;margin-left:auto">' + a.pkg + '</span>' +
+                  '<input type="checkbox" ' + (checked ? 'checked' : '') + ' onchange="toggleFilteredInstalledAppByIdx(' + fIdx + ')" />' +
+                  '<span style="font-weight:600;color:#222">' + escapeHtml(a.name) + '</span>' +
+                  '<span style="font-size:10px;color:#888;margin-left:auto">' + escapeHtml(a.pkg) + '</span>' +
                 '</label>';
               }).join('');
             }
@@ -1444,7 +1589,7 @@ jobs:
                     '<div class="modal-title">' + (isEdit ? '항목 이름·속성 수정 및 삭제' : '새 목표 항목 추가') + '</div>' +
                     '<div class="form-group">' +
                       '<label class="form-label">1. 항목 이름</label>' +
-                      '<input id="ed-name" class="form-input" placeholder="예: 독서, 운동, 물 마시기" value="' + (draftHabit.name || '') + '" />' +
+                      '<input id="ed-name" class="form-input" placeholder="예: 독서, 운동, 물 마시기" value="' + escapeHtml(draftHabit.name) + '" />' +
                     '</div>' +
                     '<div class="form-group">' +
                       '<label class="form-label">2. 항목 달성 속성 (On/Off vs 기준 수치 체크)</label>' +
@@ -1467,7 +1612,7 @@ jobs:
                           '</div>' +
                           '<div style="flex:1">' +
                             '<span style="font-size:11px;color:#555">단위 (예: 장, 분, 잔)</span>' +
-                            '<input id="ed-unit" class="form-input" value="' + (draftHabit.unit || '') + '" placeholder="장" />' +
+                            '<input id="ed-unit" class="form-input" value="' + escapeHtml(draftHabit.unit) + '" placeholder="장" />' +
                           '</div>' +
                         '</div>' +
                       '</div>'
@@ -1475,38 +1620,38 @@ jobs:
                     '<div class="form-group">' +
                       '<label class="form-label">3. 테마 색상</label>' +
                       '<div class="color-row">' +
-                        palette.map(c =>
-                          '<div class="color-dot ' + (draftHabit.color === c ? 'selected' : '') + '" style="background:' + c + '" onclick="selectDraftColor(\'' + c + '\')"></div>'
+                        palette.map((c, cIdx) =>
+                          '<div class="color-dot ' + (draftHabit.color === c ? 'selected' : '') + '" style="background:' + c + '" onclick="selectDraftColorByIdx(' + cIdx + ')"></div>'
                         ).join('') +
                       '</div>' +
                     '</div>' +
                     '<div class="form-group" style="background:#fff1f2;padding:10px;border-radius:8px;border:1px solid #fecdd3">' +
                       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-                        '<label class="form-label" style="color:#be123c;margin:0">4. 당일 미달성 시 차단할 앱 (복수 선택 가능: ' + draftBlockedList.length + '개)</label>' +
+                        '<label class="form-label" style="color:#be123c;margin:0">4. 당일 미달성 시 차단할 앱 (복수 선택: ' + draftBlockedList.length + '개)</label>' +
                         (draftBlockedList.length > 0 ? '<button type="button" style="font-size:11px;color:#be123c;background:none;border:none;font-weight:700" onclick="clearAllBlockedApps()">전체 해제</button>' : '') +
                       '</div>' +
                       '<div class="selected-app-tags">' +
                         (draftBlockedList.length === 0
-                          ? '<span style="font-size:11px;color:#888">선택된 차단 앱이 없습니다. 아래에서 여러 개를 터치해 추가하세요.</span>'
-                          : draftBlockedList.map(item =>
-                              '<span class="app-tag" onclick="toggleBlockedApp(\'' + item.pkg + '\',\'' + item.name.replace(/'/g, "\\'") + '\')">🔒 ' + item.name + ' ✕</span>'
+                          ? '<span style="font-size:11px;color:#888">선택된 차단 앱이 없습니다. 아래에서 여러 개를 선택하세요.</span>'
+                          : draftBlockedList.map((item, bIdx) =>
+                              '<span class="app-tag" onclick="removeBlockedAppByIdx(' + bIdx + ')">🔒 ' + escapeHtml(item.name) + ' ✕</span>'
                             ).join('')
                         ) +
                       '</div>' +
                       '<div style="font-size:11px;color:#555;margin-bottom:4px;font-weight:600">자주 쓰는 앱 빠른 다중 선택:</div>' +
                       '<div class="preset-chips">' +
-                        presetApps.map(p =>
-                          '<button type="button" class="chip ' + (isPkgSelected(p.pkg) ? 'active' : '') + '" onclick="toggleBlockedApp(\'' + p.pkg + '\',\'' + p.name + '\')">' +
-                            (isPkgSelected(p.pkg) ? '✓ ' : '+ ') + p.name +
+                        presetApps.map((p, pIdx) =>
+                          '<button type="button" class="chip ' + (isPkgSelected(p.pkg) ? 'active' : '') + '" onclick="togglePresetAppByIdx(' + pIdx + ')">' +
+                            (isPkgSelected(p.pkg) ? '✓ ' : '+ ') + escapeHtml(p.name) +
                           '</button>'
                         ).join('') +
                       '</div>' +
                       (installedApps.length > 0 ? (
                         '<div style="margin-top:8px">' +
                           '<div style="font-size:11px;color:#555;margin-bottom:4px;font-weight:600">내 휴대폰에 설치된 앱에서 여러 개 체크:</div>' +
-                          '<input id="ed-app-search" class="form-input" style="padding:6px 8px;font-size:12px" placeholder="앱 이름 검색..." value="' + appSearchQuery + '" oninput="onAppSearchInput(this)" />' +
+                          '<input id="ed-app-search" class="form-input" style="padding:6px 8px;font-size:12px" placeholder="앱 이름 검색..." value="' + escapeHtml(appSearchQuery) + '" oninput="onAppSearchInput(this)" />' +
                           '<div id="installed-apps-container" class="app-check-list"></div>' +
-                        '</div>' +
+                        '</div>'
                       ) : '') +
                       '<div style="margin-top:8px;display:flex;gap:4px">' +
                         '<input id="ed-custom-name" class="form-input" style="flex:1;padding:6px;font-size:11px" placeholder="앱 이름" />' +
@@ -1546,6 +1691,7 @@ jobs:
 
             function deleteHabit(idx) {
               const target = habits[idx];
+              if (!target) return;
               if (!confirm('[' + target.name + '] 항목을 삭제하시겠습니까?')) return;
               habits.splice(idx, 1);
               if (selectedHabitId === target.id) selectedHabitId = null;
@@ -1558,8 +1704,15 @@ jobs:
             }
 
             function openAccessibility() {
-              if (window.AndroidBridge) {
+              if (window.AndroidBridge && window.AndroidBridge.openAccessibilitySettings) {
                 window.AndroidBridge.openAccessibilitySettings();
+              }
+            }
+
+            function selectHabitDetailByIdx(hIdx) {
+              if (habits[hIdx]) {
+                selectedHabitId = habits[hIdx].id;
+                render();
               }
             }
 
@@ -1575,7 +1728,12 @@ jobs:
 
             function render() {
               const root = document.getElementById('app');
-              const recent6Days = getRecent6DayLabels();
+              if (!habits || habits.length === 0) {
+                habits = JSON.parse(JSON.stringify(DEFAULT_HABITS));
+                habits.forEach(h => { ensure60Days(h); recalcRates(h); });
+              }
+
+              const periodLabel = period==='day'?'일별':period==='week'?'주별':period==='month'?'월별':'연별';
 
               if (selectedHabitId) {
                 const hIdx = habits.findIndex(x => x.id === selectedHabitId);
@@ -1584,27 +1742,36 @@ jobs:
                 const pct = getAppViewRate(h);
                 const blockedApps = parseBlockedApps(h);
                 const todayDone = isAchieved(h, 0);
-
-                // 현재 선택된 기간(일별/주별/월별/연별)에 따른 시간별 진도 데이터 가져오기
-                const progressData = getProgressDataForCurrentPeriod(h);
-                const periodTitleMap = { 'day': '일별 시간 진도 (최근 10일)', 'week': '주별 진도 (최근 6주)', 'month': '월별 시간 진도 (월 단위 구분)', 'year': '연별 진도 (연도별)' };
+                const slots = getTimelineSlotsForHabit(h);
 
                 root.innerHTML =
                   '<div class="detail-header" style="background:' + h.color + '">' +
                     '<div style="display:flex;align-items:center;gap:12px">' +
                       '<span onclick="selectedHabitId=null;render()" style="font-size:22px;cursor:pointer">←</span>' +
-                      '<h2 style="font-size:17px">' + h.name + ' (' + (h.type === 'num' ? '기준 ' + h.target + h.unit + ' 이상' : 'On/Off 달성형') + ')</h2>' +
+                      '<h2 style="font-size:17px">' + escapeHtml(h.name) + ' (' + (h.type === 'num' ? '기준 ' + h.target + escapeHtml(h.unit) + ' 이상' : 'On/Off 달성형') + ')</h2>' +
                     '</div>' +
                     '<button class="top-add-btn" style="background:rgba(0,0,0,0.25)" onclick="openHabitEditor(' + hIdx + ')">✎ 수정/삭제</button>' +
                   '</div>' +
                   '<div class="period-tabs">' +
                     ['day','week','month','year'].map(p =>
                       '<button class="period-btn ' + (period===p?'active':'') + '" onclick="setPeriodMode(\'' + p + '\')">' +
-                      (p==='day'?'일별':p==='week'?'주별':p==='month'?'월별':'연별') + '</button>'
+                      (p==='day'?'일별 진도':p==='week'?'주별 진도':p==='month'?'월별 진도':'연별 진도') + '</button>'
                     ).join('') +
                   '</div>' +
                   '<div class="card">' +
-                    '<div class="card-title" style="color:' + h.color + '">한눈에 보기 (' + (period==='day'?'일별':period==='week'?'주별':period==='month'?'월별':'연별') + ' 달성율)</div>' +
+                    '<div class="card-title" style="color:' + h.color + '">' + periodLabel + ' 시간순 달성 진도 (' + slots.map(s => s.topLabel).join(' / ') + ')</div>' +
+                    '<div class="bar-wrap">' +
+                      slots.map(s =>
+                        '<div class="bar-col">' +
+                          '<div style="font-size:10px;font-weight:700;color:' + h.color + ';margin-bottom:2px">' + s.rate + '%</div>' +
+                          '<div class="bar-fill" style="height:' + Math.max(8, s.rate) + 'px;background:' + h.color + '"></div>' +
+                          '<div class="bar-lbl">' + s.topLabel + '<br><span style="font-size:8px;color:#999">' + s.subLabel + '</span></div>' +
+                        '</div>'
+                      ).join('') +
+                    '</div>' +
+                  '</div>' +
+                  '<div class="card">' +
+                    '<div class="card-title" style="color:' + h.color + '">한눈에 보기 (기간별 요약 & 1x1 위젯 60일 달성율)</div>' +
                     '<div class="overview-row">' +
                       '<div>' + ringSvg(pct, h.color, 36) + '</div>' +
                       '<div><div style="font-weight:700">' + h.rateDay + '%</div><div style="font-size:10px;color:#777">일별(오늘)</div></div>' +
@@ -1615,26 +1782,13 @@ jobs:
                     '</div>' +
                   '</div>' +
                   '<div class="card">' +
-                    '<div class="card-title" style="color:' + h.color + '">' + (periodTitleMap[period] || '시간별 진도') + '</div>' +
-                    '<div style="font-size:11px;color:#666;margin-bottom:4px">버튼을 바꿀 때마다 해당 단위(월별: 9월/10월/11월 등)별 달성 진도가 실시간 반영됩니다.</div>' +
-                    '<div class="bar-wrap">' +
-                      progressData.map(item =>
-                        '<div class="bar-col">' +
-                          '<div style="font-size:9px;font-weight:700;color:' + (item.rate > 0 ? h.color : '#999') + ';margin-bottom:2px">' + item.valText + '</div>' +
-                          '<div class="bar-fill" style="height:' + Math.max(8, item.rate) + 'px;background:' + h.color + '"></div>' +
-                          '<div class="bar-lbl">' + item.label + '</div>' +
-                        '</div>'
-                      ).join('') +
-                    '</div>' +
-                  '</div>' +
-                  '<div class="card">' +
                     '<div class="card-title" style="color:' + h.color + '">당일(' + getDateInfo(0).shortLabel + ') 상태 및 미달성 시 차단 앱 (' + blockedApps.length + '개)</div>' +
                     '<div style="font-size:13px;line-height:1.6">' +
                       '<div>• 당일 달성 여부: <b style="color:' + (todayDone ? h.color : '#ef4444') + '">' +
-                        (todayDone ? '달성 완료 (모든 차단 앱 잠금 해제됨)' : '미달성 (' + (h.type === 'num' ? '현재 ' + h.days[0] + h.unit + ' / 기준 ' + h.target + h.unit : 'Off 상태') + ')') +
+                        (todayDone ? '달성 완료 (모든 차단 앱 잠금 해제됨)' : '미달성 (' + (h.type === 'num' ? '현재 ' + h.days[0] + escapeHtml(h.unit) + ' / 기준 ' + h.target + escapeHtml(h.unit) : 'Off 상태') + ')') +
                       '</b></div>' +
                       '<div style="margin-top:4px">• 차단 지정된 앱 목록: ' +
-                        (blockedApps.length === 0 ? '<b>없음</b>' : blockedApps.map(a => '<span class="app-tag" style="margin-right:4px">🔒 ' + a.name + '</span>').join('')) +
+                        (blockedApps.length === 0 ? '<b>없음</b>' : blockedApps.map(a => '<span class="app-tag" style="margin-right:4px">🔒 ' + escapeHtml(a.name) + '</span>').join('')) +
                       '</div>' +
                     '</div>' +
                   '</div>' +
@@ -1646,7 +1800,7 @@ jobs:
                         const dInfo = getDateInfo(dIdx);
                         return '<div class="grid-60-cell" onclick="handleCellClick(' + hIdx + ',' + dIdx + ')" style="background:' + (ok ? h.color : '#f3f4f6') + ';color:' + (ok ? '#fff' : '#4b5563') + ';border-color:' + (dIdx === 0 ? '#111' : '#e5e7eb') + ';border-width:' + (dIdx === 0 ? '2px' : '1px') + '">' +
                           '<div style="font-size:9px;opacity:0.92">' + dInfo.shortLabel + '</div>' +
-                          '<div style="font-size:11px;margin-top:2px">' + (h.type === 'num' ? (v + h.unit) : (ok ? '✓' : '✕')) + '</div>' +
+                          '<div style="font-size:11px;margin-top:2px">' + (h.type === 'num' ? (v + escapeHtml(h.unit)) : (ok ? '✓' : '✕')) + '</div>' +
                         '</div>';
                       }).join('') +
                     '</div>' +
@@ -1654,7 +1808,8 @@ jobs:
                 return;
               }
 
-              const periodLabel = period==='day'?'일별':period==='week'?'주별':period==='month'?'월별':'연별';
+              const headerSlots = getTimelineSlotsForHabit(habits[0]);
+              const overallTimeline = getOverallTimelineSummary();
 
               root.innerHTML =
                 '<div class="topbar">' +
@@ -1666,18 +1821,32 @@ jobs:
                   '<button class="service-btn" onclick="openAccessibility()">' + (blockerEnabled ? '권한 설정' : '권한 켜기') + '</button>' +
                 '</div>' +
                 '<div class="widget-info-bar">' +
-                  '<span>📌 앱 화면: <b>' + periodLabel + ' 시간별 진도</b> 표시 중</span>' +
-                  '<span>📱 1x1 홈 위젯: <b>최근 60일 달성율</b> 고정 표시</span>' +
+                  '<span>📌 현재 보기: <b>' + periodLabel + ' 시간순 진도</b></span>' +
+                  '<span>📱 1x1 위젯: <b>최근 60일 달성율</b></span>' +
                 '</div>' +
                 '<div class="period-tabs">' +
                   ['day','week','month','year'].map(p =>
                     '<button class="period-btn ' + (period===p?'active':'') + '" onclick="setPeriodMode(\'' + p + '\')">' +
-                    (p==='day'?'일별 진도':p==='week'?'주별 진도':p==='month'?'월별 진도':'연별 진도') + '</button>'
+                    (p==='day'?'일별':p==='week'?'주별':p==='month'?'월별':'연별') + '</button>'
                   ).join('') +
                 '</div>' +
+                '<div class="summary-timeline-card">' +
+                  '<div class="summary-timeline-title">' +
+                    '<span>📊 전체 목표 ' + periodLabel + ' 시간순 달성율 추이 (' + overallTimeline.map(x => x.label).join(' · ') + ')</span>' +
+                  '</div>' +
+                  '<div class="bar-wrap" style="height:86px;padding-top:10px">' +
+                    overallTimeline.map(item =>
+                      '<div class="bar-col">' +
+                        '<div style="font-size:9px;font-weight:700;color:#00838f;margin-bottom:2px">' + item.rate + '%</div>' +
+                        '<div class="bar-fill" style="height:' + Math.max(6, Math.round(item.rate * 0.55)) + 'px;background:#00acc1"></div>' +
+                        '<div class="bar-lbl">' + item.label + '</div>' +
+                      '</div>'
+                    ).join('') +
+                  '</div>' +
+                '</div>' +
                 '<div class="header-row">' +
-                  '<div class="habit-col">목표 (' + periodLabel + ' 진도 / 위젯 60일)</div>' +
-                  recent6Days.map(d => '<div class="day-col">' + d[0] + '<br>' + d[1] + '</div>').join('') +
+                  '<div class="habit-col">목표 (' + periodLabel + ' / 위젯60일)</div>' +
+                  headerSlots.map(s => '<div class="day-col">' + s.topLabel + '<br><span style="font-size:9px;font-weight:400">' + s.subLabel + '</span></div>').join('') +
                 '</div>' +
                 habits.map((h, hIdx) => {
                   const blockedApps = parseBlockedApps(h);
@@ -1685,31 +1854,43 @@ jobs:
                     ? (' · 🔒' + blockedApps[0].name + (blockedApps.length > 1 ? ' 외 ' + (blockedApps.length - 1) + '개' : ''))
                     : '';
                   const subText = (h.type === 'num' ? ('기준 ' + h.target + h.unit) : 'On/Off') +
-                    ' · 위젯60일:' + h.rate60Days + '%' + blockLabel;
+                    ' · 위젯:' + h.rate60Days + '%' + blockLabel;
+                  const hSlots = getTimelineSlotsForHabit(h);
+
                   return '<div class="habit-card">' +
                     '<div class="habit-info">' +
                       '<button class="edit-icon-btn" onclick="openHabitEditor(' + hIdx + ')">✎</button>' +
-                      '<div onclick="selectedHabitId=\'' + h.id + '\';render()" style="display:flex;align-items:center;gap:7px;overflow:hidden;flex:1;cursor:pointer">' +
+                      '<div onclick="selectHabitDetailByIdx(' + hIdx + ')" style="display:flex;align-items:center;gap:7px;overflow:hidden;flex:1;cursor:pointer">' +
                         ringSvg(getAppViewRate(h), h.color, 26) +
                         '<div class="habit-meta">' +
-                          '<div class="habit-name-row"><span class="habit-name" style="color:' + h.color + '">' + h.name + '</span></div>' +
-                          '<div class="habit-sub">' + subText + '</div>' +
+                          '<div class="habit-name-row"><span class="habit-name" style="color:' + h.color + '">' + escapeHtml(h.name) + '</span></div>' +
+                          '<div class="habit-sub">' + escapeHtml(subText) + '</div>' +
                         '</div>' +
                       '</div>' +
                     '</div>' +
-                    h.days.slice(0, 6).map((v, dIdx) => {
-                      const passed = isAchieved(h, dIdx);
-                      const cellColor = passed ? h.color : (v > 0 ? '#f59e0b' : '#ccc');
-                      let cellContent = '';
-                      if (h.type === 'num') {
-                        cellContent = '<div>' + v + '<span style="font-size:9px">' + h.unit + '</span></div>' +
-                          '<div style="font-size:8px;color:' + (passed ? h.color : '#999') + '">' + (passed ? '달성' : '미달') + '</div>';
+                    hSlots.map(s => {
+                      if (s.isDirectDay) {
+                        const passed = s.passed;
+                        const v = s.rawVal;
+                        const cellColor = passed ? h.color : (v > 0 ? '#f59e0b' : '#ccc');
+                        let cellContent = '';
+                        if (h.type === 'num') {
+                          cellContent = '<div>' + v + '<span style="font-size:9px">' + escapeHtml(h.unit) + '</span></div>' +
+                            '<div style="font-size:8px;color:' + (passed ? h.color : '#999') + '">' + (passed ? '달성' : '미달') + '</div>';
+                        } else {
+                          cellContent = passed ? '✓' : '✕';
+                        }
+                        return '<button class="cell-btn" style="color:' + cellColor + '" onclick="handleCellClick(' + hIdx + ',' + s.dayIdx + ')">' +
+                          cellContent +
+                        '</button>';
                       } else {
-                        cellContent = v > 0 ? '✓' : '✕';
+                        return '<button class="cell-btn" onclick="selectHabitDetailByIdx(' + hIdx + ')">' +
+                          '<div style="font-size:11px;font-weight:700;color:' + (s.rate >= 50 ? h.color : '#666') + '">' + s.rate + '%</div>' +
+                          '<div style="width:80%;height:5px;background:#eee;margin:3px auto 0 auto;border-radius:3px;overflow:hidden">' +
+                            '<div style="width:' + s.rate + '%;height:100%;background:' + h.color + '"></div>' +
+                          '</div>' +
+                        '</button>';
                       }
-                      return '<button class="cell-btn" style="color:' + cellColor + '" onclick="handleCellClick(' + hIdx + ',' + dIdx + ')">' +
-                        cellContent +
-                      '</button>';
                     }).join('') +
                   '</div>';
                 }).join('') +

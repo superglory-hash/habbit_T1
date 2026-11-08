@@ -19,7 +19,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Generate Android Project (20-Year Heatmap & Backup/Restore)
+      - name: Generate Android Project (Default OFF on New Day, Backup Compat, Proportional Bar Chart)
         run: |
           mkdir -p app/src/main/java/com/example/habbit
           mkdir -p app/src/main/res/layout
@@ -74,8 +74,8 @@ jobs:
                   applicationId "com.example.habbit"
                   minSdk 26
                   targetSdk 34
-                  versionCode 7
-                  versionName "7.0"
+                  versionCode 8
+                  versionName "8.0"
               }
 
               buildTypes {
@@ -249,6 +249,7 @@ jobs:
               val blockedAppName: String,
               val days: IntArray,
               val history: JSONObject,
+              val lastSyncDate: String,
               val rateDay: Int,
               val rateWeek: Int,
               val rateMonth: Int,
@@ -328,21 +329,36 @@ jobs:
               private fun parseHabitList(raw: String): List<HabitItem> {
                   val list = mutableListOf<HabitItem>()
                   val arr = JSONArray(raw)
+                  val todayStr = dateKeyDaysAgo(0)
+
                   for (i in 0 until arr.length()) {
                       val o = arr.optJSONObject(i) ?: continue
                       val type = o.optString("type", "bool")
                       val target = o.optInt("target", 1).coerceAtLeast(1)
                       val dArr = o.optJSONArray("days") ?: JSONArray()
                       val histObj = o.optJSONObject("history") ?: JSONObject()
+                      val savedSyncDate = o.optString("lastSyncDate", "")
 
+                      // 구버전 백업 데이터(history가 비어있고 days 배열만 있는 경우) 최초 1회 마이그레이션
+                      if (histObj.length() == 0 && dArr.length() > 0) {
+                          val baseDate = try {
+                              if (savedSyncDate.length >= 10) LocalDate.parse(savedSyncDate.substring(0, 10))
+                              else LocalDate.now()
+                          } catch (e: Exception) {
+                              LocalDate.now()
+                          }
+                          for (idx in 0 until dArr.length()) {
+                              val k = baseDate.minusDays(idx.toLong()).toString()
+                              histObj.put(k, dArr.optInt(idx, 0))
+                          }
+                      }
+
+                      // 중요: 날(day)이 바뀌었을 때 새로운 날짜는 history에 없으므로 무조건 0(OFF)으로 처리!
+                      // 절대 이전 날의 days[0] 값을 새 날짜로 복사하지 않음
                       val days = IntArray(60) { idx ->
                           val dateKey = dateKeyDaysAgo(idx)
                           if (histObj.has(dateKey)) {
                               histObj.optInt(dateKey, 0)
-                          } else if (idx < dArr.length()) {
-                              val v = dArr.optInt(idx, 0)
-                              histObj.put(dateKey, v)
-                              v
                           } else {
                               0
                           }
@@ -366,6 +382,7 @@ jobs:
                               blockedAppName = o.optString("blockedAppName", ""),
                               days = days,
                               history = histObj,
+                              lastSyncDate = todayStr,
                               rateDay = rateDay,
                               rateWeek = rateWeek,
                               rateMonth = rateMonth,
@@ -394,26 +411,28 @@ jobs:
                       for (i in 0 until arr.length()) {
                           val o = arr.optJSONObject(i) ?: continue
                           if (o.optString("id") == habitId) {
-                              val dArr = o.optJSONArray("days") ?: JSONArray()
                               val histObj = o.optJSONObject("history") ?: JSONObject()
                               val type = o.optString("type", "bool")
                               val target = o.optInt("target", 1).coerceAtLeast(1)
-                              val cur = if (histObj.has(todayKey)) histObj.optInt(todayKey, 0) else dArr.optInt(0, 0)
+                              // 오늘 기록이 없으면 기본값은 무조건 0(OFF)
+                              val cur = if (histObj.has(todayKey)) histObj.optInt(todayKey, 0) else 0
                               val next = if (type == "num") {
                                   if (cur >= target * 2) 0 else cur + 1
                               } else {
                                   if (cur > 0) 0 else 1
                               }
-                              dArr.put(0, next)
                               histObj.put(todayKey, next)
                               o.put("history", histObj)
+                              o.put("lastSyncDate", todayKey)
 
+                              val newDaysArr = JSONArray()
                               val days = IntArray(60) { idx ->
                                   val k = dateKeyDaysAgo(idx)
-                                  if (histObj.has(k)) histObj.optInt(k, 0)
-                                  else if (idx < dArr.length()) dArr.optInt(idx, 0)
-                                  else 0
+                                  val v = if (histObj.has(k)) histObj.optInt(k, 0) else 0
+                                  newDaysArr.put(v)
+                                  v
                               }
+                              o.put("days", newDaysArr)
                               o.put("rateDay", computeRate(days, type, target, 1))
                               o.put("rateWeek", computeRate(days, type, target, 7))
                               o.put("rateMonth", computeRate(days, type, target, 30))
@@ -435,13 +454,16 @@ jobs:
                       .getString("widget_$appWidgetId", "jung") ?: "jung"
               }
 
-              private fun build60Days(first6: IntArray, patternMod: Int, fillVal: Int): JSONArray {
+              // 당일(index 0)을 포함한 미기록 날짜의 기본값은 항상 0(OFF)
+              private fun build60Days(first6: IntArray): JSONArray {
                   val arr = JSONArray()
                   for (i in 0 until 60) {
-                      if (i < first6.size) {
+                      if (i == 0) {
+                          arr.put(0) // 당일 기본값은 무조건 OFF(0)
+                      } else if (i < first6.size) {
                           arr.put(first6[i])
                       } else {
-                          arr.put(if (i % patternMod == 0 || i % (patternMod + 1) == 0) fillVal else 0)
+                          arr.put(0)
                       }
                   }
                   return arr
@@ -449,11 +471,12 @@ jobs:
 
               fun defaultJson(): String {
                   val arr = JSONArray()
+                  val todayStr = dateKeyDaysAgo(0)
 
                   fun addDefault(
                       id: String, name: String, color: String, type: String,
                       unit: String, target: Int, blockedPkg: String, blockedAppName: String,
-                      first6: IntArray, patternMod: Int, fillVal: Int, rateYear: Int
+                      first6: IntArray, rateYear: Int
                   ) {
                       val o = JSONObject()
                       o.put("id", id)
@@ -464,23 +487,27 @@ jobs:
                       o.put("target", target)
                       o.put("blockedPkg", blockedPkg)
                       o.put("blockedAppName", blockedAppName)
-                      val d60 = build60Days(first6, patternMod, fillVal)
+                      val d60 = build60Days(first6)
                       val hist = JSONObject()
                       for (idx in 0 until d60.length()) {
-                          hist.put(dateKeyDaysAgo(idx), d60.optInt(idx, 0))
+                          val v = d60.optInt(idx, 0)
+                          if (v > 0) {
+                              hist.put(dateKeyDaysAgo(idx), v)
+                          }
                       }
                       o.put("days", d60)
                       o.put("history", hist)
+                      o.put("lastSyncDate", todayStr)
                       o.put("rateYear", rateYear)
                       arr.put(o)
                   }
 
-                  addDefault("jung", "중", "#00acc1", "bool", "", 1, "", "", intArrayOf(1,0,1,1,1,0), 2, 1, 58)
-                  addDefault("man", "만", "#fb8c00", "bool", "", 1, "com.google.android.youtube,com.instagram.android", "YouTube,Instagram", intArrayOf(0,0,0,1,1,0), 4, 1, 48)
-                  addDefault("un", "운", "#7cb342", "bool", "", 1, "", "", intArrayOf(1,0,0,1,0,0), 3, 1, 41)
-                  addDefault("gyung", "경", "#d81b60", "num", "장", 5, "", "", intArrayOf(5,0,0,3,0,0), 3, 5, 44)
-                  addDefault("mul", "물", "#8e24aa", "bool", "", 1, "", "", intArrayOf(0,0,0,0,0,0), 5, 1, 25)
-                  addDefault("jung2", "중2", "#1e88e5", "bool", "", 1, "", "", intArrayOf(0,0,0,0,0,0), 4, 1, 38)
+                  addDefault("jung", "중", "#00acc1", "bool", "", 1, "", "", intArrayOf(0,0,1,1,1,0), 58)
+                  addDefault("man", "만", "#fb8c00", "bool", "", 1, "com.google.android.youtube,com.instagram.android", "YouTube,Instagram", intArrayOf(0,0,0,1,1,0), 48)
+                  addDefault("un", "운", "#7cb342", "bool", "", 1, "", "", intArrayOf(0,0,0,1,0,0), 41)
+                  addDefault("gyung", "경", "#d81b60", "num", "장", 5, "", "", intArrayOf(0,0,0,3,0,0), 44)
+                  addDefault("mul", "물", "#8e24aa", "bool", "", 1, "", "", intArrayOf(0,0,0,0,0,0), 25)
+                  addDefault("jung2", "중2", "#1e88e5", "bool", "", 1, "", "", intArrayOf(0,0,0,0,0,0), 38)
 
                   return arr.toString()
               }
@@ -1014,7 +1041,7 @@ jobs:
                               if (extractedHabitsJson != null) {
                                   HabbitStorage.saveHabitsJson(this, extractedHabitsJson)
                                   webView.evaluateJavascript("window.onBackupRestoredFromNative && window.onBackupRestoredFromNative();", null)
-                                  Toast.makeText(this, "백업 데이터를 성공적으로 불러왔습니다!", Toast.LENGTH_LONG).show()
+                                  Toast.makeText(this, "기존 백업 파일을 성공적으로 불러왔습니다!", Toast.LENGTH_LONG).show()
                               } else {
                                   Toast.makeText(this, "유효하지 않은 백업 파일 형식입니다.", Toast.LENGTH_LONG).show()
                               }
@@ -1025,18 +1052,48 @@ jobs:
                   }
               }
 
+              // 기존 백업 파일(v2~v7 모든 JSON 구조) 완벽 호환 파서
               private fun extractValidHabitsArray(raw: String): String? {
-                  val trimmed = raw.trim()
+                  val trimmed = raw.replace("\uFEFF", "").trim()
                   return try {
-                      if (trimmed.startsWith("{")) {
+                      var exportedDateStr = ""
+                      val habitsArr: JSONArray? = if (trimmed.startsWith("{")) {
                           val obj = JSONObject(trimmed)
-                          if (obj.has("habits")) {
-                              obj.getJSONArray("habits").toString()
-                          } else null
+                          exportedDateStr = obj.optString("exportedAt", "")
+                          if (obj.has("habits")) obj.getJSONArray("habits") else null
                       } else if (trimmed.startsWith("[")) {
-                          val arr = JSONArray(trimmed)
-                          if (arr.length() >= 0) arr.toString() else null
+                          JSONArray(trimmed)
                       } else null
+
+                      if (habitsArr == null) return null
+
+                      val anchorDate = try {
+                          if (exportedDateStr.length >= 10) LocalDate.parse(exportedDateStr.substring(0, 10))
+                          else LocalDate.now()
+                      } catch (e: Exception) {
+                          LocalDate.now()
+                      }
+
+                      for (i in 0 until habitsArr.length()) {
+                          val hObj = habitsArr.optJSONObject(i) ?: continue
+                          var histObj = hObj.optJSONObject("history")
+                          if (histObj == null) {
+                              histObj = JSONObject()
+                              hObj.put("history", histObj)
+                          }
+                          val dArr = hObj.optJSONArray("days")
+                          // 만약 백업 파일에 history가 비어있거나 없고 days 배열만 있다면 백업 시점 날짜 기준으로 history 복원
+                          if (histObj.length() == 0 && dArr != null && dArr.length() > 0) {
+                              for (dIdx in 0 until dArr.length()) {
+                                  val k = anchorDate.minusDays(dIdx.toLong()).toString()
+                                  histObj.put(k, dArr.optInt(dIdx, 0))
+                              }
+                          }
+                          if (!hObj.has("lastSyncDate")) {
+                              hObj.put("lastSyncDate", anchorDate.toString())
+                          }
+                      }
+                      habitsArr.toString()
                   } catch (e: Exception) {
                       null
                   }
@@ -1083,6 +1140,7 @@ jobs:
                               h.days.forEach { d.put(it) }
                               o.put("days", d)
                               o.put("history", h.history)
+                              o.put("lastSyncDate", h.lastSyncDate)
                               o.put("rateDay", h.rateDay)
                               o.put("rateWeek", h.rateWeek)
                               o.put("rateMonth", h.rateMonth)
@@ -1243,10 +1301,14 @@ jobs:
             .card { background: #fff; margin-bottom: 8px; padding: 14px 16px; border-bottom: 1px solid #e5e7eb; }
             .card-title { font-size: 13px; font-weight: 700; margin-bottom: 10px; }
             .overview-row { display: flex; justify-content: space-between; align-items: center; text-align: center; }
-            .bar-wrap { display: flex; align-items: flex-end; height: 120px; gap: 6px; padding-top: 16px; border-bottom: 1px solid #eee; }
-            .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
-            .bar-fill { width: 18px; border-radius: 3px 3px 0 0; }
-            .bar-lbl { font-size: 10px; color: #555; margin-top: 4px; text-align: center; font-weight: 600; }
+            /* 막대그래프 높이가 수치(0%~100%)에 정확히 비례하도록 전용 고정 높이 트랙 구조 적용 */
+            .bar-wrap { display: flex; align-items: flex-end; gap: 8px; padding: 10px 4px 8px 4px; border-bottom: 1px solid #eee; }
+            .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+            .bar-pct { font-size: 10px; font-weight: 800; margin-bottom: 4px; white-space: nowrap; }
+            .bar-track { width: 22px; height: 100px; background: #f1f5f9; border-radius: 4px; display: flex; align-items: flex-end; overflow: hidden; flex-shrink: 0; border: 1px solid #e2e8f0; }
+            .bar-track-sm { width: 18px; height: 60px; background: #f1f5f9; border-radius: 4px; display: flex; align-items: flex-end; overflow: hidden; flex-shrink: 0; }
+            .bar-fill { width: 100%; border-radius: 3px 3px 0 0; transition: height 0.2s ease; }
+            .bar-lbl { font-size: 10px; color: #555; margin-top: 5px; text-align: center; font-weight: 600; line-height: 1.25; }
             .heatmap-mode-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
             .hm-tab { flex: 1; padding: 7px 4px; font-size: 11px; font-weight: 700; border: 1px solid #d1d5db; border-radius: 6px; background: #f9fafb; color: #4b5563; text-align: center; }
             .hm-tab.active { background: #111827; color: #fff; border-color: #111827; }
@@ -1296,11 +1358,12 @@ jobs:
           <div id="modal-root"></div>
 
           <script>
+            // 당일(index 0)의 초기 기본값은 모두 OFF(0)
             const DEFAULT_HABITS = [
-              { id: "jung", name: "중", color: "#00acc1", type: "bool", unit: "", target: 1, blockedPkg: "", blockedAppName: "", days: [1,0,1,1,1,0], history: {}, rateYear: 58 },
+              { id: "jung", name: "중", color: "#00acc1", type: "bool", unit: "", target: 1, blockedPkg: "", blockedAppName: "", days: [0,0,1,1,1,0], history: {}, rateYear: 58 },
               { id: "man", name: "만", color: "#fb8c00", type: "bool", unit: "", target: 1, blockedPkg: "com.google.android.youtube,com.instagram.android", blockedAppName: "YouTube,Instagram", days: [0,0,0,1,1,0], history: {}, rateYear: 48 },
-              { id: "un", name: "운", color: "#7cb342", type: "bool", unit: "", target: 1, blockedPkg: "", blockedAppName: "", days: [1,0,0,1,0,0], history: {}, rateYear: 41 },
-              { id: "gyung", name: "경", color: "#d81b60", type: "num", unit: "장", target: 5, blockedPkg: "", blockedAppName: "", days: [5,0,0,3,0,0], history: {}, rateYear: 44 },
+              { id: "un", name: "운", color: "#7cb342", type: "bool", unit: "", target: 1, blockedPkg: "", blockedAppName: "", days: [0,0,0,1,0,0], history: {}, rateYear: 41 },
+              { id: "gyung", name: "경", color: "#d81b60", type: "num", unit: "장", target: 5, blockedPkg: "", blockedAppName: "", days: [0,0,0,3,0,0], history: {}, rateYear: 44 },
               { id: "mul", name: "물", color: "#8e24aa", type: "bool", unit: "", target: 1, blockedPkg: "", blockedAppName: "", days: [0,0,0,0,0,0], history: {}, rateYear: 25 },
               { id: "jung2", name: "중2", color: "#1e88e5", type: "bool", unit: "", target: 1, blockedPkg: "", blockedAppName: "", days: [0,0,0,0,0,0], history: {}, rateYear: 38 }
             ];
@@ -1314,10 +1377,9 @@ jobs:
             let filteredInstalledApps = [];
             let appSearchQuery = '';
 
-            // 20년 히트맵 상태 변수
             const CURRENT_YEAR = new Date().getFullYear();
-            const MIN_YEAR = CURRENT_YEAR - 19; // 최근 20년 (예: 2007 ~ 2026)
-            let heatmapViewMode = '20y_calendar'; // 'recent60' | '20y_calendar' | '20y_matrix'
+            const MIN_YEAR = CURRENT_YEAR - 19;
+            let heatmapViewMode = '20y_calendar';
             let heatmapYear = CURRENT_YEAR;
             let heatmapMonth = new Date().getMonth() + 1;
 
@@ -1392,42 +1454,60 @@ jobs:
               return new Date(year, month, 0).getDate();
             }
 
-            function ensureHabitHistoryAnd60Days(h) {
-              if (!h.history || typeof h.history !== 'object') {
-                h.history = {};
-              }
-              if (!Array.isArray(h.days)) h.days = [];
-              const fillVal = (h.type === 'num') ? (h.target || 5) : 1;
-              let idx = h.days.length;
-              while (h.days.length < 60) {
-                h.days.push((idx % 3 === 0) ? fillVal : 0);
-                idx++;
-              }
-              if (h.days.length > 60) h.days = h.days.slice(0, 60);
-
-              // 최근 60일 배열과 날짜별 history 맵 양방향 동기화
-              for (let i = 0; i < 60; i++) {
-                const key = getDateInfo(i).dateKey;
-                if (typeof h.history[key] === 'number') {
-                  h.days[i] = h.history[key];
-                } else {
-                  h.history[key] = h.days[i] || 0;
+            function getDateKeyOffsetFromBase(baseDateStr, daysAgo) {
+              let dt = new Date();
+              if (baseDateStr && String(baseDateStr).length >= 10) {
+                const parts = String(baseDateStr).substring(0, 10).split('-');
+                if (parts.length === 3) {
+                  dt = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
                 }
               }
+              dt.setDate(dt.getDate() - daysAgo);
+              return formatDateKey(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
+            }
+
+            // 중요: 날(day)이 바뀌었을 때 새로운 날은 history에 키가 없으므로 기본값 0(OFF)으로 설정!
+            // 기존 백업 파일(history가 없고 days 배열만 있는 경우)도 자동 마이그레이션 지원
+            function ensureHabitHistoryAnd60Days(h, fallbackAnchorDateStr) {
+              if (!h.history || typeof h.history !== 'object' || Array.isArray(h.history)) {
+                h.history = {};
+              }
+              if (!Array.isArray(h.days)) {
+                h.days = [];
+              }
+
+              const histKeys = Object.keys(h.history);
+              if (histKeys.length === 0 && h.days.length > 0) {
+                const anchor = h.lastSyncDate || fallbackAnchorDateStr || getDateInfo(0).dateKey;
+                for (let i = 0; i < h.days.length; i++) {
+                  const v = parseInt(h.days[i], 10) || 0;
+                  const k = getDateKeyOffsetFromBase(anchor, i);
+                  h.history[k] = v;
+                }
+              }
+
+              // 최근 60일 배열(days[0..59])을 오늘 날짜 기준으로 history에서 읽어 재구성 (기록 없는 날은 무조건 0 = OFF)
+              const newDays = [];
+              for (let i = 0; i < 60; i++) {
+                const key = getDateInfo(i).dateKey;
+                const val = (typeof h.history[key] === 'number') ? h.history[key] : (parseInt(h.history[key], 10) || 0);
+                newDays.push(val);
+              }
+              h.days = newDays;
+              h.lastSyncDate = getDateInfo(0).dateKey;
             }
 
             function getValueOnDateKey(h, dateKey) {
-              if (h.history && typeof h.history[dateKey] === 'number') {
-                return h.history[dateKey];
+              if (h.history && h.history[dateKey] !== undefined) {
+                return parseInt(h.history[dateKey], 10) || 0;
               }
-              return 0;
+              return 0; // 기본값은 항상 OFF(0)
             }
 
             function setValueOnDateKey(h, dateKey, val) {
               ensureHabitHistoryAnd60Days(h);
               const cleanVal = Math.max(0, parseInt(val, 10) || 0);
               h.history[dateKey] = cleanVal;
-              // 최근 60일 이내의 날짜라면 days 배열도 즉시 동기화 (1x1 위젯 반영용)
               for (let i = 0; i < 60; i++) {
                 if (getDateInfo(i).dateKey === dateKey) {
                   h.days[i] = cleanVal;
@@ -1461,7 +1541,6 @@ jobs:
               return Math.round((ok / winSize) * 100);
             }
 
-            // 특정 연도·월(1~12)의 실제 달력 일수 기준 달성율 계산 (20년 전 구간 지원)
             function calcYearMonthRate(h, year, month) {
               const totalDays = getDaysInMonth(year, month);
               const todayKey = getDateInfo(0).dateKey;
@@ -1477,7 +1556,6 @@ jobs:
               return Math.round((ok / counted) * 100);
             }
 
-            // 특정 연도 전체(1월~12월) 달성율 계산
             function calcFullYearRate(h, year) {
               const todayKey = getDateInfo(0).dateKey;
               let ok = 0;
@@ -1674,7 +1752,6 @@ jobs:
               render();
             }
 
-            // 날짜 키("YYYY-MM-DD") 기반 기록 클릭/수정 처리 (20년 모든 날짜 공통)
             function handleDateKeyClick(hIdx, dateKey) {
               const h = habits[hIdx];
               if (!h) return;
@@ -1725,7 +1802,6 @@ jobs:
               saveAll();
             }
 
-            // 20년 히트맵 뷰 컨트롤 함수들
             function setHeatmapViewMode(mode) {
               heatmapViewMode = mode;
               render();
@@ -1760,7 +1836,6 @@ jobs:
               render();
             }
 
-            // 20년 히트맵 섹션 렌더링 (최근 60일 / 20년 연·월 달력 + 365일 잔디 / 20년 전체 매트릭스)
             function render20YearHeatmapCard(h, hIdx) {
               let yearOptions = '';
               for (let y = CURRENT_YEAR; y >= MIN_YEAR; y--) {
@@ -1806,7 +1881,6 @@ jobs:
                   );
                 }
 
-                // 선택한 연도의 365일 전체 연간 잔디 히트맵 생성
                 const grassDots = [];
                 for (let m = 1; m <= 12; m++) {
                   const md = getDaysInMonth(heatmapYear, m);
@@ -1836,7 +1910,6 @@ jobs:
                     '<div class="year-grass-wrap"><div class="year-grass-grid">' + grassDots.join('') + '</div></div>' +
                   '</div>';
               } else {
-                // 20년 전체 연도×월 매트릭스 히트맵 (MIN_YEAR ~ CURRENT_YEAR)
                 let rowsHtml = '';
                 for (let y = CURRENT_YEAR; y >= MIN_YEAR; y--) {
                   const yrRate = calcFullYearRate(h, y);
@@ -1877,11 +1950,10 @@ jobs:
               '</div>';
             }
 
-            // 백업 및 복원 모달 열기
             function openBackupModal() {
               const backupPayload = {
                 app: 'habbit',
-                version: 7,
+                version: 8,
                 exportedAt: new Date().toISOString(),
                 habits: habits
               };
@@ -1892,10 +1964,10 @@ jobs:
                   '<div class="modal-box" onclick="event.stopPropagation()">' +
                     '<div class="modal-title">💾 달성율 데이터 백업 및 불러오기</div>' +
                     '<div style="font-size:12px;color:#555;margin-bottom:12px;line-height:1.5">' +
-                      '모든 목표 설정과 <b>20년 히트맵 달성율 기록</b>을 파일(.json)로 백업하거나, 백업해 둔 데이터를 불러와 복원할 수 있습니다.' +
+                      '모든 목표 설정과 <b>20년 히트맵 달성율 기록</b>을 파일(.json)로 백업하거나, <b>기존에 백업해 둔 .json 파일</b>을 그대로 불러와 복원할 수 있습니다.' +
                     '</div>' +
                     '<div class="form-group" style="background:#f0fdfa;padding:12px;border-radius:10px;border:1px solid #99f6e4">' +
-                      '<label class="form-label" style="color:#0f766e">1. 스마트폰 파일로 백업 / 불러오기 (권장)</label>' +
+                      '<label class="form-label" style="color:#0f766e">1. 스마트폰 파일로 백업 / 기존 백업 파일 불러오기</label>' +
                       '<div style="display:flex;gap:8px;margin-top:8px">' +
                         '<button type="button" class="btn btn-primary" style="font-size:13px;padding:10px" onclick="triggerExportBackupFile()">📤 백업 파일 저장(.json)</button>' +
                         '<button type="button" class="btn" style="font-size:13px;padding:10px;background:#0f766e;color:#fff" onclick="triggerImportBackupFile()">📥 백업 파일 불러오기</button>' +
@@ -1907,7 +1979,7 @@ jobs:
                         '<button type="button" class="chip active" onclick="copyBackupText()">클립보드 복사</button>' +
                       '</div>' +
                       '<textarea id="backup-json-textarea" class="form-input" style="height:110px;font-family:monospace;font-size:11px">' + escapeHtml(backupJsonStr) + '</textarea>' +
-                      '<button type="button" class="btn btn- primary" style="width:100%;margin-top:8px;background:#374151;color:#fff;font-size:13px;padding:9px" onclick="restoreFromTextarea()">위 텍스트 데이터로 즉시 복원하기</button>' +
+                      '<button type="button" class="btn btn-primary" style="width:100%;margin-top:8px;background:#374151;color:#fff;font-size:13px;padding:9px" onclick="restoreFromTextarea()">위 텍스트 데이터로 즉시 복원하기</button>' +
                     '</div>' +
                     '<div class="btn-row">' +
                       '<button class="btn btn-secondary" onclick="closeModal()">닫기</button>' +
@@ -1919,7 +1991,7 @@ jobs:
             function triggerExportBackupFile() {
               const backupPayload = {
                 app: 'habbit',
-                version: 7,
+                version: 8,
                 exportedAt: new Date().toISOString(),
                 habits: habits
               };
@@ -1950,6 +2022,7 @@ jobs:
               }
             }
 
+            // 기존 백업 JSON 데이터(구버전 배열 및 신버전 객체 모두) 완벽 호환 복원
             function restoreFromTextarea() {
               const el = document.getElementById('backup-json-textarea');
               if (!el || !el.value.trim()) {
@@ -1957,14 +2030,16 @@ jobs:
                 return;
               }
               try {
-                const parsed = JSON.parse(el.value.trim());
+                const rawStr = el.value.replace(/^\uFEFF/, '').trim();
+                const parsed = JSON.parse(rawStr);
+                const exportedAtStr = (parsed && typeof parsed.exportedAt === 'string') ? parsed.exportedAt : '';
                 const list = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.habits) ? parsed.habits : null);
                 if (!list || list.length === 0) {
                   alert('유효한 목표 백업 데이터가 없습니다.');
                   return;
                 }
                 habits = list;
-                habits.forEach(h => { ensureHabitHistoryAnd60Days(h); recalcRates(h); });
+                habits.forEach(h => { ensureHabitHistoryAnd60Days(h, exportedAtStr); recalcRates(h); });
                 closeModal();
                 saveAll();
                 alert('백업 데이터를 성공적으로 불러왔습니다!');
@@ -1997,6 +2072,7 @@ jobs:
                   blockedAppName: '',
                   days: new Array(60).fill(0),
                   history: {},
+                  lastSyncDate: getDateInfo(0).dateKey,
                   rateDay: 0, rateWeek: 0, rateMonth: 0, rateYear: 0, rate60Days: 0
                 };
                 draftBlockedList = [];
@@ -2287,13 +2363,16 @@ jobs:
                   '<div class="card">' +
                     '<div class="card-title" style="color:' + h.color + '">' + periodLabel + ' 시간순 달성 진도 (' + slots.map(s => s.topLabel).join(' / ') + ')</div>' +
                     '<div class="bar-wrap">' +
-                      slots.map(s =>
-                        '<div class="bar-col">' +
-                          '<div style="font-size:10px;font-weight:700;color:' + h.color + ';margin-bottom:2px">' + s.rate + '%</div>' +
-                          '<div class="bar-fill" style="height:' + Math.max(8, s.rate) + 'px;background:' + h.color + '"></div>' +
+                      slots.map(s => {
+                        const clampedRate = Math.max(0, Math.min(100, s.rate));
+                        return '<div class="bar-col">' +
+                          '<div class="bar-pct" style="color:' + (clampedRate > 0 ? h.color : '#9ca3af') + '">' + clampedRate + '%</div>' +
+                          '<div class="bar-track">' +
+                            '<div class="bar-fill" style="height:' + clampedRate + '%;background:' + h.color + '"></div>' +
+                          '</div>' +
                           '<div class="bar-lbl">' + s.topLabel + '<br><span style="font-size:8px;color:#999">' + s.subLabel + '</span></div>' +
-                        '</div>'
-                      ).join('') +
+                        '</div>';
+                      }).join('') +
                     '</div>' +
                   '</div>' +
                   '<div class="card">' +
@@ -2351,14 +2430,17 @@ jobs:
                   '<div class="summary-timeline-title">' +
                     '<span>📊 전체 목표 ' + periodLabel + ' 시간순 달성율 추이 (' + overallTimeline.map(x => x.label).join(' · ') + ')</span>' +
                   '</div>' +
-                  '<div class="bar-wrap" style="height:86px;padding-top:10px">' +
-                    overallTimeline.map(item =>
-                      '<div class="bar-col">' +
-                        '<div style="font-size:9px;font-weight:700;color:#00838f;margin-bottom:2px">' + item.rate + '%</div>' +
-                        '<div class="bar-fill" style="height:' + Math.max(6, Math.round(item.rate * 0.55)) + 'px;background:#00acc1"></div>' +
+                  '<div class="bar-wrap">' +
+                    overallTimeline.map(item => {
+                      const clampedRate = Math.max(0, Math.min(100, item.rate));
+                      return '<div class="bar-col">' +
+                        '<div class="bar-pct" style="color:#00838f">' + clampedRate + '%</div>' +
+                        '<div class="bar-track-sm">' +
+                          '<div class="bar-fill" style="height:' + clampedRate + '%;background:#00acc1"></div>' +
+                        '</div>' +
                         '<div class="bar-lbl">' + item.label + '</div>' +
-                      '</div>'
-                    ).join('') +
+                      '</div>';
+                    }).join('') +
                   '</div>' +
                 '</div>' +
                 '<div class="header-row">' +

@@ -19,7 +19,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Generate Android Project (Default OFF on New Day, Backup Compat, Proportional Bar Chart)
+      - name: Generate Android Project (7-Column Sunday-First Heatmap & Backup Compat)
         run: |
           mkdir -p app/src/main/java/com/example/habbit
           mkdir -p app/src/main/res/layout
@@ -74,8 +74,8 @@ jobs:
                   applicationId "com.example.habbit"
                   minSdk 26
                   targetSdk 34
-                  versionCode 8
-                  versionName "8.0"
+                  versionCode 9
+                  versionName "9.0"
               }
 
               buildTypes {
@@ -339,7 +339,6 @@ jobs:
                       val histObj = o.optJSONObject("history") ?: JSONObject()
                       val savedSyncDate = o.optString("lastSyncDate", "")
 
-                      // 구버전 백업 데이터(history가 비어있고 days 배열만 있는 경우) 최초 1회 마이그레이션
                       if (histObj.length() == 0 && dArr.length() > 0) {
                           val baseDate = try {
                               if (savedSyncDate.length >= 10) LocalDate.parse(savedSyncDate.substring(0, 10))
@@ -353,8 +352,7 @@ jobs:
                           }
                       }
 
-                      // 중요: 날(day)이 바뀌었을 때 새로운 날짜는 history에 없으므로 무조건 0(OFF)으로 처리!
-                      // 절대 이전 날의 days[0] 값을 새 날짜로 복사하지 않음
+                      // 날이 바뀌었을 때 기록이 없는 새 날짜는 항상 0(OFF)으로 시작
                       val days = IntArray(60) { idx ->
                           val dateKey = dateKeyDaysAgo(idx)
                           if (histObj.has(dateKey)) {
@@ -414,7 +412,6 @@ jobs:
                               val histObj = o.optJSONObject("history") ?: JSONObject()
                               val type = o.optString("type", "bool")
                               val target = o.optInt("target", 1).coerceAtLeast(1)
-                              // 오늘 기록이 없으면 기본값은 무조건 0(OFF)
                               val cur = if (histObj.has(todayKey)) histObj.optInt(todayKey, 0) else 0
                               val next = if (type == "num") {
                                   if (cur >= target * 2) 0 else cur + 1
@@ -454,12 +451,11 @@ jobs:
                       .getString("widget_$appWidgetId", "jung") ?: "jung"
               }
 
-              // 당일(index 0)을 포함한 미기록 날짜의 기본값은 항상 0(OFF)
               private fun build60Days(first6: IntArray): JSONArray {
                   val arr = JSONArray()
                   for (i in 0 until 60) {
                       if (i == 0) {
-                          arr.put(0) // 당일 기본값은 무조건 OFF(0)
+                          arr.put(0)
                       } else if (i < first6.size) {
                           arr.put(first6[i])
                       } else {
@@ -1052,7 +1048,6 @@ jobs:
                   }
               }
 
-              // 기존 백업 파일(v2~v7 모든 JSON 구조) 완벽 호환 파서
               private fun extractValidHabitsArray(raw: String): String? {
                   val trimmed = raw.replace("\uFEFF", "").trim()
                   return try {
@@ -1082,7 +1077,6 @@ jobs:
                               hObj.put("history", histObj)
                           }
                           val dArr = hObj.optJSONArray("days")
-                          // 만약 백업 파일에 history가 비어있거나 없고 days 배열만 있다면 백업 시점 날짜 기준으로 history 복원
                           if (histObj.length() == 0 && dArr != null && dArr.length() > 0) {
                               for (dIdx in 0 until dArr.length()) {
                                   val k = anchorDate.minusDays(dIdx.toLong()).toString()
@@ -1301,7 +1295,6 @@ jobs:
             .card { background: #fff; margin-bottom: 8px; padding: 14px 16px; border-bottom: 1px solid #e5e7eb; }
             .card-title { font-size: 13px; font-weight: 700; margin-bottom: 10px; }
             .overview-row { display: flex; justify-content: space-between; align-items: center; text-align: center; }
-            /* 막대그래프 높이가 수치(0%~100%)에 정확히 비례하도록 전용 고정 높이 트랙 구조 적용 */
             .bar-wrap { display: flex; align-items: flex-end; gap: 8px; padding: 10px 4px 8px 4px; border-bottom: 1px solid #eee; }
             .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
             .bar-pct { font-size: 10px; font-weight: 800; margin-bottom: 4px; white-space: nowrap; }
@@ -1315,11 +1308,19 @@ jobs:
             .hm-filter-bar { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; background: #f3f4f6; padding: 8px; border-radius: 8px; }
             .hm-select { flex: 1; padding: 6px 8px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 12px; font-weight: 700; background: #fff; }
             .hm-nav-btn { padding: 6px 10px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; font-size: 12px; font-weight: 700; }
-            .grid-60 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 8px; }
-            .grid-60-cell { padding: 7px 2px; text-align: center; border-radius: 6px; font-weight: 700; border: 1px solid #e5e7eb; cursor: pointer; }
-            .year-grass-wrap { overflow-x: auto; padding-bottom: 6px; margin-top: 6px; }
+            /* 요일별 7개 컬럼 (일요일 맨 앞 배치) */
+            .dow-header-7 { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin-top: 8px; margin-bottom: 4px; background: #f8fafc; padding: 6px 0; border-radius: 6px; border: 1px solid #e2e8f0; }
+            .dow-header-cell { text-align: center; font-size: 11px; font-weight: 800; color: #374151; }
+            .dow-header-cell.sun { color: #ef4444; }
+            .dow-header-cell.sat { color: #2563eb; }
+            .grid-7 { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+            .grid-7-cell { padding: 6px 1px; text-align: center; border-radius: 6px; font-weight: 700; border: 1px solid #e5e7eb; cursor: pointer; min-height: 44px; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+            .grid-7-empty { min-height: 44px; border-radius: 6px; background: transparent; border: 1px dashed #f1f5f9; }
+            .year-grass-wrap { overflow-x: auto; padding-bottom: 6px; margin-top: 6px; display: flex; gap: 4px; align-items: flex-start; }
+            .grass-dow-col { display: grid; grid-template-rows: repeat(7, 13px); gap: 3px; font-size: 9px; font-weight: 800; color: #6b7280; padding-right: 2px; line-height: 13px; }
             .year-grass-grid { display: grid; grid-template-rows: repeat(7, 13px); grid-auto-flow: column; grid-auto-columns: 13px; gap: 3px; width: max-content; }
             .grass-dot { width: 13px; height: 13px; border-radius: 3px; cursor: pointer; }
+            .grass-dot-empty { width: 13px; height: 13px; background: transparent; }
             .matrix-20y-table { width: 100%; border-collapse: separate; border-spacing: 2px; font-size: 10px; text-align: center; }
             .matrix-20y-table th { padding: 4px 1px; color: #555; font-weight: 700; }
             .matrix-20y-table td { padding: 5px 1px; border-radius: 4px; font-weight: 700; cursor: pointer; }
@@ -1358,7 +1359,6 @@ jobs:
           <div id="modal-root"></div>
 
           <script>
-            // 당일(index 0)의 초기 기본값은 모두 OFF(0)
             const DEFAULT_HABITS = [
               { id: "jung", name: "중", color: "#00acc1", type: "bool", unit: "", target: 1, blockedPkg: "", blockedAppName: "", days: [0,0,1,1,1,0], history: {}, rateYear: 58 },
               { id: "man", name: "만", color: "#fb8c00", type: "bool", unit: "", target: 1, blockedPkg: "com.google.android.youtube,com.instagram.android", blockedAppName: "YouTube,Instagram", days: [0,0,0,1,1,0], history: {}, rateYear: 48 },
@@ -1418,14 +1418,17 @@ jobs:
               const d = parseInt(parts[2], 10);
               const dt = new Date(y, m - 1, d);
               const korDays = ['일','월','화','수','목','금','토'];
-              const dow = korDays[dt.getDay()];
+              const dowIdx = dt.getDay(); // 0(일요일) ~ 6(토요일)
+              const dow = korDays[dowIdx];
               return {
                 year: y,
                 month: m,
                 d: d,
+                dowIdx: dowIdx,
                 dow: dow,
                 dateKey: dateKey,
-                shortLabel: m + '/' + d + '(' + dow + ')',
+                shortLabel: m + '/' + d,
+                shortWithDow: m + '/' + d + '(' + dow + ')',
                 fullLabel: y + '년 ' + m + '월 ' + d + '일(' + dow + '요일)'
               };
             }
@@ -1437,15 +1440,18 @@ jobs:
               const m = dt.getMonth() + 1;
               const d = dt.getDate();
               const korDays = ['일','월','화','수','목','금','토'];
-              const dow = korDays[dt.getDay()];
+              const dowIdx = dt.getDay(); // 0 = 일요일
+              const dow = korDays[dowIdx];
               const dateKey = formatDateKey(y, m, d);
               return {
                 year: y,
                 month: m,
                 d: d,
+                dowIdx: dowIdx,
                 dow: dow,
                 dateKey: dateKey,
                 shortLabel: m + '/' + d + '(' + dow + ')',
+                mdLabel: m + '/' + d,
                 fullLabel: y + '년 ' + m + '월 ' + d + '일(' + dow + '요일)'
               };
             }
@@ -1466,8 +1472,6 @@ jobs:
               return formatDateKey(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
             }
 
-            // 중요: 날(day)이 바뀌었을 때 새로운 날은 history에 키가 없으므로 기본값 0(OFF)으로 설정!
-            // 기존 백업 파일(history가 없고 days 배열만 있는 경우)도 자동 마이그레이션 지원
             function ensureHabitHistoryAnd60Days(h, fallbackAnchorDateStr) {
               if (!h.history || typeof h.history !== 'object' || Array.isArray(h.history)) {
                 h.history = {};
@@ -1486,7 +1490,6 @@ jobs:
                 }
               }
 
-              // 최근 60일 배열(days[0..59])을 오늘 날짜 기준으로 history에서 읽어 재구성 (기록 없는 날은 무조건 0 = OFF)
               const newDays = [];
               for (let i = 0; i < 60; i++) {
                 const key = getDateInfo(i).dateKey;
@@ -1501,7 +1504,7 @@ jobs:
               if (h.history && h.history[dateKey] !== undefined) {
                 return parseInt(h.history[dateKey], 10) || 0;
               }
-              return 0; // 기본값은 항상 OFF(0)
+              return 0;
             }
 
             function setValueOnDateKey(h, dateKey, val) {
@@ -1836,6 +1839,17 @@ jobs:
               render();
             }
 
+            // 일요일이 제일 앞에 배치되는 7개 요일 컬럼 헤더 생성
+            function renderSundayFirstDowHeader() {
+              const days = ['일', '월', '화', '수', '목', '금', '토'];
+              return '<div class="dow-header-7">' +
+                days.map((d, idx) => {
+                  const cls = idx === 0 ? 'dow-header-cell sun' : (idx === 6 ? 'dow-header-cell sat' : 'dow-header-cell');
+                  return '<div class="' + cls + '">' + d + '</div>';
+                }).join('') +
+              '</div>';
+            }
+
             function render20YearHeatmapCard(h, hIdx) {
               let yearOptions = '';
               for (let y = CURRENT_YEAR; y >= MIN_YEAR; y--) {
@@ -1846,42 +1860,83 @@ jobs:
                 monthOptions += '<option value="' + m + '" ' + (heatmapMonth === m ? 'selected' : '') + '>' + m + '월</option>';
               }
 
+              const todayKey = getDateInfo(0).dateKey;
               let bodyHtml = '';
+
               if (heatmapViewMode === 'recent60') {
+                // 최근 60일(59일 전 ~ 오늘)을 요일별 7컬럼(일요일 맨 앞)으로 정렬하여 표시
+                const startInfo = getDateInfo(59);
+                const endInfo = getDateInfo(0);
+                const recentCells = [];
+
+                // 시작 날짜(59일 전)의 요일(0=일요일 ~ 6=토요일)만큼 앞쪽 빈칸 배치
+                for (let pad = 0; pad < startInfo.dowIdx; pad++) {
+                  recentCells.push('<div class="grid-7-empty"></div>');
+                }
+
+                for (let dIdx = 59; dIdx >= 0; dIdx--) {
+                  const dInfo = getDateInfo(dIdx);
+                  const val = getValueOnDateKey(h, dInfo.dateKey);
+                  const ok = isValueAchieved(h, val);
+                  const isToday = (dIdx === 0);
+                  const dateTxtColor = ok ? '#fff' : (dInfo.dowIdx === 0 ? '#dc2626' : (dInfo.dowIdx === 6 ? '#2563eb' : '#4b5563'));
+                  recentCells.push(
+                    '<div class="grid-7-cell" onclick="handleDateKeyClick(' + hIdx + ',\'' + dInfo.dateKey + '\')" style="background:' + (ok ? h.color : '#f3f4f6') + ';color:' + (ok ? '#fff' : '#374151') + ';border-color:' + (isToday ? '#111' : '#e5e7eb') + ';border-width:' + (isToday ? '2px' : '1px') + '">' +
+                      '<div style="font-size:9px;color:' + dateTxtColor + ';opacity:0.95">' + dInfo.mdLabel + '</div>' +
+                      '<div style="font-size:11px;margin-top:2px">' + (h.type === 'num' ? (val + escapeHtml(h.unit)) : (ok ? '✓' : '✕')) + '</div>' +
+                    '</div>'
+                  );
+                }
+
+                // 마지막 주 남은 요일 칸 빈칸 채우기
+                const trailing = (7 - (recentCells.length % 7)) % 7;
+                for (let pad = 0; pad < trailing; pad++) {
+                  recentCells.push('<div class="grid-7-empty"></div>');
+                }
+
                 bodyHtml =
-                  '<div style="font-size:11px;color:#666;margin-bottom:6px">최근 60일(' + getDateInfo(59).shortLabel + ' ~ ' + getDateInfo(0).shortLabel + ') 기록이며 1x1 홈 위젯 달성율에 즉시 반영됩니다.</div>' +
-                  '<div class="grid-60">' +
-                    h.days.map((v, dIdx) => {
-                      const dInfo = getDateInfo(dIdx);
-                      const val = getValueOnDateKey(h, dInfo.dateKey);
-                      const ok = isValueAchieved(h, val);
-                      return '<div class="grid-60-cell" onclick="handleDateKeyClick(' + hIdx + ',\'' + dInfo.dateKey + '\')" style="background:' + (ok ? h.color : '#f3f4f6') + ';color:' + (ok ? '#fff' : '#4b5563') + ';border-color:' + (dIdx === 0 ? '#111' : '#e5e7eb') + ';border-width:' + (dIdx === 0 ? '2px' : '1px') + '">' +
-                        '<div style="font-size:9px;opacity:0.92">' + dInfo.shortLabel + '</div>' +
-                        '<div style="font-size:11px;margin-top:2px">' + (h.type === 'num' ? (val + escapeHtml(h.unit)) : (ok ? '✓' : '✕')) + '</div>' +
-                      '</div>';
-                    }).join('') +
-                  '</div>';
+                  '<div style="font-size:11px;color:#666;margin-bottom:4px">최근 60일(' + startInfo.shortLabel + ' ~ ' + endInfo.shortLabel + ') 요일별 7컬럼 트리맵이며, 1x1 홈 위젯 달성율에 즉시 반영됩니다.</div>' +
+                  renderSundayFirstDowHeader() +
+                  '<div class="grid-7">' + recentCells.join('') + '</div>';
+
               } else if (heatmapViewMode === '20y_calendar') {
                 const dim = getDaysInMonth(heatmapYear, heatmapMonth);
                 const ymRate = calcYearMonthRate(h, heatmapYear, heatmapMonth);
                 const fullYrRate = calcFullYearRate(h, heatmapYear);
-                const todayKey = getDateInfo(0).dateKey;
+                const firstDayDow = new Date(heatmapYear, heatmapMonth - 1, 1).getDay(); // 0(일요일) ~ 6(토요일)
                 const monthCells = [];
+
+                // 해당 월 1일의 요일 위치에 맞춰 일요일(0)부터 빈칸 삽입
+                for (let pad = 0; pad < firstDayDow; pad++) {
+                  monthCells.push('<div class="grid-7-empty"></div>');
+                }
+
                 for (let d = 1; d <= dim; d++) {
                   const dateKey = formatDateKey(heatmapYear, heatmapMonth, d);
                   const dInfo = parseDateKeyInfo(dateKey);
                   const val = getValueOnDateKey(h, dateKey);
                   const ok = isValueAchieved(h, val);
                   const isToday = (dateKey === todayKey);
+                  const dateTxtColor = ok ? '#fff' : (dInfo.dowIdx === 0 ? '#dc2626' : (dInfo.dowIdx === 6 ? '#2563eb' : '#4b5563'));
                   monthCells.push(
-                    '<div class="grid-60-cell" onclick="handleDateKeyClick(' + hIdx + ',\'' + dateKey + '\')" style="background:' + (ok ? h.color : '#f3f4f6') + ';color:' + (ok ? '#fff' : '#4b5563') + ';border-color:' + (isToday ? '#111' : '#e5e7eb') + ';border-width:' + (isToday ? '2px' : '1px') + '">' +
-                      '<div style="font-size:9px;opacity:0.92">' + dInfo.shortLabel + '</div>' +
+                    '<div class="grid-7-cell" onclick="handleDateKeyClick(' + hIdx + ',\'' + dateKey + '\')" style="background:' + (ok ? h.color : '#f3f4f6') + ';color:' + (ok ? '#fff' : '#374151') + ';border-color:' + (isToday ? '#111' : '#e5e7eb') + ';border-width:' + (isToday ? '2px' : '1px') + '">' +
+                      '<div style="font-size:9px;color:' + dateTxtColor + ';opacity:0.95">' + heatmapMonth + '/' + d + '</div>' +
                       '<div style="font-size:11px;margin-top:2px">' + (h.type === 'num' ? (val + escapeHtml(h.unit)) : (ok ? '✓' : '✕')) + '</div>' +
                     '</div>'
                   );
                 }
 
+                const trailing = (7 - (monthCells.length % 7)) % 7;
+                for (let pad = 0; pad < trailing; pad++) {
+                  monthCells.push('<div class="grid-7-empty"></div>');
+                }
+
+                // 365일 연간 잔디도 1월 1일 요일 오프셋을 맞춰 첫 번째 줄이 일요일(일~토 7행)이 되도록 정렬
                 const grassDots = [];
+                const jan1Dow = new Date(heatmapYear, 0, 1).getDay();
+                for (let pad = 0; pad < jan1Dow; pad++) {
+                  grassDots.push('<div class="grass-dot-empty"></div>');
+                }
                 for (let m = 1; m <= 12; m++) {
                   const md = getDaysInMonth(heatmapYear, m);
                   for (let d = 1; d <= md; d++) {
@@ -1900,14 +1955,18 @@ jobs:
                     '<select class="hm-select" onchange="onHeatmapMonthChange(this)">' + monthOptions + '</select>' +
                     '<button class="hm-nav-btn" onclick="shiftHeatmapMonth(1)">▶</button>' +
                   '</div>' +
-                  '<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:6px;color:#333">' +
+                  '<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:4px;color:#333">' +
                     '<span>📅 ' + heatmapYear + '년 ' + heatmapMonth + '월 달성율: <b style="color:' + h.color + '">' + ymRate + '%</b></span>' +
                     '<span>' + heatmapYear + '년 연간: <b>' + fullYrRate + '%</b></span>' +
                   '</div>' +
-                  '<div class="grid-60">' + monthCells.join('') + '</div>' +
+                  renderSundayFirstDowHeader() +
+                  '<div class="grid-7">' + monthCells.join('') + '</div>' +
                   '<div style="margin-top:14px;padding-top:10px;border-top:1px solid #eee">' +
-                    '<div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">🌱 ' + heatmapYear + '년 365일 전체 잔디 히트맵 (좌우 스크롤 · 칸 터치 시 수정)</div>' +
-                    '<div class="year-grass-wrap"><div class="year-grass-grid">' + grassDots.join('') + '</div></div>' +
+                    '<div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">🌱 ' + heatmapYear + '년 365일 요일별 잔디 히트맵 (맨 윗줄 일요일 · 터치 시 수정)</div>' +
+                    '<div class="year-grass-wrap">' +
+                      '<div class="grass-dow-col"><span style="color:#ef4444">일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span style="color:#2563eb">토</span></div>' +
+                      '<div class="year-grass-grid">' + grassDots.join('') + '</div>' +
+                    '</div>' +
                   '</div>';
               } else {
                 let rowsHtml = '';
@@ -1930,7 +1989,7 @@ jobs:
                 }
 
                 bodyHtml =
-                  '<div style="font-size:11px;color:#555;margin-bottom:6px">최근 20년(' + MIN_YEAR + '년 ~ ' + CURRENT_YEAR + '년) 전체 달성율 히트맵입니다. 원하는 연도·월 칸을 터치하면 해당 달력으로 이동해 날짜별 기록을 수정할 수 있습니다.</div>' +
+                  '<div style="font-size:11px;color:#555;margin-bottom:6px">최근 20년(' + MIN_YEAR + '년 ~ ' + CURRENT_YEAR + '년) 전체 달성율 히트맵입니다. 원하는 연도·월 칸을 터치하면 7컬럼 요일별 달력으로 이동합니다.</div>' +
                   '<div style="overflow-x:auto">' +
                     '<table class="matrix-20y-table">' +
                       '<thead><tr><th>연도</th>' + [1,2,3,4,5,6,7,8,9,10,11,12].map(m => '<th>' + m + '월</th>').join('') + '<th>연간</th></tr></thead>' +
@@ -1940,11 +1999,11 @@ jobs:
               }
 
               return '<div class="card">' +
-                '<div class="card-title" style="color:' + h.color + '">20년 데이터 히트맵 (' + MIN_YEAR + '년 ~ ' + CURRENT_YEAR + '년 조회 및 수정)</div>' +
+                '<div class="card-title" style="color:' + h.color + '">20년 요일별(일~토 7컬럼) 히트맵 (' + MIN_YEAR + '년 ~ ' + CURRENT_YEAR + '년)</div>' +
                 '<div class="heatmap-mode-tabs">' +
-                  '<button class="hm-tab ' + (heatmapViewMode === '20y_calendar' ? 'active' : '') + '" onclick="setHeatmapViewMode(\'20y_calendar\')">20년 연·월 달력/잔디</button>' +
-                  '<button class="hm-tab ' + (heatmapViewMode === '20y_matrix' ? 'active' : '') + '" onclick="setHeatmapViewMode(\'20y_matrix\')">20년 전체 한눈에 보기</button>' +
-                  '<button class="hm-tab ' + (heatmapViewMode === 'recent60' ? 'active' : '') + '" onclick="setHeatmapViewMode(\'recent60\')">최근 60일(위젯)</button>' +
+                  '<button class="hm-tab ' + (heatmapViewMode === '20y_calendar' ? 'active' : '') + '" onclick="setHeatmapViewMode(\'20y_calendar\')">20년 연·월 달력(7열)</button>' +
+                  '<button class="hm-tab ' + (heatmapViewMode === 'recent60' ? 'active' : '') + '" onclick="setHeatmapViewMode(\'recent60\')">최근 60일(7열)</button>' +
+                  '<button class="hm-tab ' + (heatmapViewMode === '20y_matrix' ? 'active' : '') + '" onclick="setHeatmapViewMode(\'20y_matrix\')">20년 전체 요약</button>' +
                 '</div>' +
                 bodyHtml +
               '</div>';
@@ -1953,7 +2012,7 @@ jobs:
             function openBackupModal() {
               const backupPayload = {
                 app: 'habbit',
-                version: 8,
+                version: 9,
                 exportedAt: new Date().toISOString(),
                 habits: habits
               };
@@ -1991,7 +2050,7 @@ jobs:
             function triggerExportBackupFile() {
               const backupPayload = {
                 app: 'habbit',
-                version: 8,
+                version: 9,
                 exportedAt: new Date().toISOString(),
                 habits: habits
               };
@@ -2022,7 +2081,6 @@ jobs:
               }
             }
 
-            // 기존 백업 JSON 데이터(구버전 배열 및 신버전 객체 모두) 완벽 호환 복원
             function restoreFromTextarea() {
               const el = document.getElementById('backup-json-textarea');
               if (!el || !el.value.trim()) {
